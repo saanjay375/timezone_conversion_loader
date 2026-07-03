@@ -1,14 +1,14 @@
 """
 summary.py
 
-Summary generation utilities.
+Migration summary generation.
 
 Responsibilities
 ----------------
-- Final status calculation
+- Final status determination
 - Summary object creation
-- Summary JSON file creation
-- Atomic summary file writing
+- JSON summary file creation
+- Atomic file writing
 - Migration statistics reporting
 
 Author: Timezone Conversion Loader
@@ -101,9 +101,13 @@ class SummaryManager:
         logger
     ):
 
-        self.global_config = global_config
+        self.global_config = (
+            global_config
+        )
 
-        self.table_config = table_config
+        self.table_config = (
+            table_config
+        )
 
         self.logger = logger
 
@@ -127,7 +131,7 @@ class SummaryManager:
         )
 
     ###########################################################################
-    # STATUS CALCULATION
+    # STATUS
     ###########################################################################
 
     def determine_status(
@@ -143,14 +147,14 @@ class SummaryManager:
         if statistics.failed_chunks > 0:
 
             return (
-                SummaryStatus.
-                COMPLETED_WITH_ERRORS
+                SummaryStatus
+                .COMPLETED_WITH_ERRORS
             )
 
         return SummaryStatus.COMPLETED
 
     ###########################################################################
-    # BUILD SUMMARY OBJECT
+    # BUILD SUMMARY
     ###########################################################################
 
     def build_summary(
@@ -179,8 +183,8 @@ class SummaryManager:
 
             +
 
-            self.global_config.
-            newtablenamesuffix
+            self.global_config
+            .newtablenamesuffix
         )
 
         return SummaryFile(
@@ -195,12 +199,12 @@ class SummaryManager:
                 target_table,
 
             source_timezone=
-                self.global_config.
-                source_timezone,
+                self.global_config
+                .source_timezone,
 
             target_timezone=
-                self.global_config.
-                target_timezone,
+                self.global_config
+                .target_timezone,
 
             status=
                 self.determine_status(
@@ -209,39 +213,35 @@ class SummaryManager:
                 ).value,
 
             driving_column=
-                self.table_config.
-                driving_column,
+                self.table_config
+                .driving_column,
 
             chunk_size=
-                self.table_config.
-                chunk_size,
+                self.table_config
+                .chunk_size,
 
             parallel_threads=
-                self.table_config.
-                parallel_threads,
+                self.table_config
+                .parallel_threads,
 
             startvalue=
-                self.table_config.
-                startvalue,
+                self.table_config
+                .startvalue,
 
             total_chunks=
                 total_chunks,
 
             completed_chunks=
-                statistics.
-                completed_chunks,
+                statistics.completed_chunks,
 
             failed_chunks=
-                statistics.
-                failed_chunks,
+                statistics.failed_chunks,
 
             null_chunk_processed=
-                statistics.
-                null_chunk_processed,
+                statistics.null_chunk_processed,
 
             total_rows_loaded=
-                statistics.
-                total_rows_loaded,
+                statistics.total_rows_loaded,
 
             rowcount_validation=
                 rowcount_validation,
@@ -260,7 +260,7 @@ class SummaryManager:
         )
 
     ###########################################################################
-    # CONVERT TO JSON PAYLOAD
+    # TO DICT
     ###########################################################################
 
     def to_dict(
@@ -271,7 +271,7 @@ class SummaryManager:
         return {
 
             ###################################################################
-            # TABLE INFO
+            # TABLE
             ###################################################################
 
             "schema":
@@ -284,7 +284,7 @@ class SummaryManager:
                 summary.target_table,
 
             ###################################################################
-            # TIMEZONE INFO
+            # TIMEZONE
             ###################################################################
 
             "source_timezone":
@@ -317,7 +317,7 @@ class SummaryManager:
                 summary.startvalue,
 
             ###################################################################
-            # CHUNK STATISTICS
+            # CHUNKS
             ###################################################################
 
             "total_chunks":
@@ -333,7 +333,7 @@ class SummaryManager:
                 summary.null_chunk_processed,
 
             ###################################################################
-            # LOAD STATISTICS
+            # LOAD METRICS
             ###################################################################
 
             "total_rows_loaded":
@@ -372,7 +372,7 @@ class SummaryManager:
         }
 
     ###########################################################################
-    # WRITE FILE
+    # WRITE SUMMARY
     ###########################################################################
 
     def write_summary(
@@ -389,8 +389,7 @@ class SummaryManager:
         )
 
         tmp_file = (
-            summary_file
-            +
+            summary_file +
             ".tmp"
         )
 
@@ -425,7 +424,7 @@ class SummaryManager:
         )
 
     ###########################################################################
-    # BUILD + WRITE
+    # CREATE SUMMARY
     ###########################################################################
 
     def create_summary(

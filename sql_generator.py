@@ -1,107 +1,151 @@
 """
-sql_*enerator.py
+sql_generator.py
 
-Dynamic SQL generatio*.
+Dynamic SQL generation layer.
 
-Author: Timezone Conversion Loa*er
+Responsibilities
+----------------
+- Generate INSERT ... SELECT statements
+- Convert timestamp columns from source timezone to UTC
+- Generate range-chunk SQL
+- Generate NULL-chunk SQL
+- Generate dry-run preview information
+
+Design Rules
+------------
+✓ INSERT ... ON CONFLICT DO NOTHING
+✓ No COPY support
+✓ No partition support
+✓ All timestamp without time zone columns converted
+✓ Non-timestamp columns copied unchanged
+✓ NULL chunk processed separately
+
+Author: Timezone Conversion Loader
 """
 
-from __future__ import ann*tations
+from __future__ import annotations
 
-from config import Global*onfig
-from config import TableConf*g
+from config import GlobalConfig
+from config import TableConfig
 
+
+###############################################################################
+# SQL GENERATOR
+###############################################################################
 
 class SQLGenerator:
 
-    def _*init__(
+    def __init__(
         self,
-        glob*l_config: GlobalConfig,
-        ta*le_config: TableConfig,
-        ta*le_context: dict
+        global_config: GlobalConfig,
+        table_config: TableConfig,
+        table_context: dict
     ):
 
-        s*lf.global_config = global_config
+        self.global_config = global_config
 
-*       self.table_config = table_c*nfig
+        self.table_config = table_config
 
-        self.table_context =*table_context
+        self.table_context = table_context
 
-    ###############*##################################*########################
-    # TAR*ET TABLE
-    #####################*##################################*##################
+    ###########################################################################
+    # TARGET TABLE
+    ###########################################################################
 
-    def target*table_name(self):
+    def target_table_name(
+        self
+    ) -> str:
 
-        return *
-            self.table_config.tab*e_name
+        return (
+
+            self.table_config.table_name
+
             +
-            s*lf.global_config.newtablenamesuffi*
+
+            self.global_config.newtablenamesuffix
         )
 
-    ##################*##################################*#####################
-    # INSERT*COLUMN LIST
-    ##################*##################################*#####################
+    ###########################################################################
+    # INSERT COLUMN LIST
+    ###########################################################################
 
-    def bui*d_insert_column_list(
-        self*    ):
+    def build_insert_column_list(
+        self
+    ) -> str:
+
+        columns = [
+
+            f'"{column}"'
+
+            for column in
+            self.table_context["all_columns"]
+        ]
 
         return ",".join(
-
-*           [
-                f'"{c*lumn}"'
-
-                for colum* in
-                self.table_con*ext[
-                    "all_colu*ns"
-                ]
-            *
+            columns
         )
 
-    ##################*##################################*#####################
-    # SELECT*LIST
-    #########################*##################################*##############
+    ###########################################################################
+    # SELECT LIST
+    ###########################################################################
 
-    def build_sele*t_list(
+    def build_select_list(
         self
-    ):
+    ) -> str:
 
-     *  expressions = []
+        expressions = []
 
-        timest*mp_columns = set(
+        timestamp_columns = set(
 
-            sel*.table_context[
-                "t*mestamp_columns"
+            self.table_context[
+                "timestamp_columns"
             ]
-   *    )
+        )
 
-        source_timezone = (*            self.global_config.
-  *         source_timezone
-        )*
+        source_timezone = (
+
+            self.global_config
+            .source_timezone
+        )
+
         for column in (
-         *  self.table_context[
-            *   "all_columns"
+
+            self.table_context[
+                "all_columns"
             ]
-   *    ):
+        ):
 
-            ##############*##################################*#################
-            # TI*ESTAMP COLUMN
-            ########*##################################*#######################
+            ###################################################################
+            # TIMESTAMP COLUMN
+            ###################################################################
 
-         *  if column in timestamp_columns:
-*                expressions.append*
+            if column in timestamp_columns:
 
-                    f'''
-       *            "{column}"
+                #
+                # Convert:
+                #
+                # timestamp without timezone
+                #
+                # FROM source_timezone
+                #
+                # TO UTC
+                #
 
-          *         AT TIME ZONE
-            *       '{source_timezone}'
+                expressions.append(
 
-      *             AT TIME ZONE
-                    'UTC'
+                    f"""
+                    (
+                        "{column}"
+
+                        AT TIME ZONE
+                        '{source_timezone}'
+
+                        AT TIME ZONE
+                        'UTC'
+                    )
 
                     AS "{column}"
-                    '''
+                    """
                 )
 
             ###################################################################
@@ -111,7 +155,6 @@ class SQLGenerator:
             else:
 
                 expressions.append(
-
                     f'"{column}"'
                 )
 
@@ -120,12 +163,12 @@ class SQLGenerator:
         )
 
     ###########################################################################
-    # RANGE INSERT SQL
+    # RANGE CHUNK SQL
     ###########################################################################
 
     def build_range_insert_sql(
         self
-    ):
+    ) -> str:
 
         schema = (
             self.table_config.schema
@@ -140,28 +183,28 @@ class SQLGenerator:
         )
 
         driving_column = (
-            self.table_config.
-            driving_column
+            self.table_config
+            .driving_column
         )
 
         insert_columns = (
             self.build_insert_column_list()
         )
 
-        select_list = (
+        select_columns = (
             self.build_select_list()
         )
 
-        sql_text = f"""
+        return f"""
         INSERT INTO
-        {schema}.{target_table}
+            {schema}.{target_table}
         (
             {insert_columns}
         )
 
         SELECT
 
-            {select_list}
+            {select_columns}
 
         FROM
             {schema}.{source_table}
@@ -179,15 +222,13 @@ class SQLGenerator:
         ON CONFLICT DO NOTHING
         """
 
-        return sql_text
-
     ###########################################################################
     # NULL CHUNK SQL
     ###########################################################################
 
     def build_null_chunk_sql(
         self
-    ):
+    ) -> str:
 
         schema = (
             self.table_config.schema
@@ -202,28 +243,28 @@ class SQLGenerator:
         )
 
         driving_column = (
-            self.table_config.
-            driving_column
+            self.table_config
+            .driving_column
         )
 
         insert_columns = (
             self.build_insert_column_list()
         )
 
-        select_list = (
+        select_columns = (
             self.build_select_list()
         )
 
-        sql_text = f"""
+        return f"""
         INSERT INTO
-        {schema}.{target_table}
+            {schema}.{target_table}
         (
             {insert_columns}
         )
 
         SELECT
 
-            {select_list}
+            {select_columns}
 
         FROM
             {schema}.{source_table}
@@ -236,31 +277,29 @@ class SQLGenerator:
         ON CONFLICT DO NOTHING
         """
 
-        return sql_text
-
     ###########################################################################
-    # PREDICATE DESCRIPTION
+    # CHUNK DESCRIPTION
     ###########################################################################
 
     def describe_range_chunk(
         self,
         chunk
-    ):
+    ) -> str:
 
         return (
 
-            f'{chunk.start_value} '
+            f"{chunk.start_value} "
 
-            f'to '
+            f"to "
 
-            f'{chunk.end_value}'
+            f"{chunk.end_value}"
         )
 
     ###########################################################################
-    # PREVIEW SQL (DRYRUN)
+    # PREVIEW INFO
     ###########################################################################
 
-    def build_preview_sql(
+    def build_preview_info(
         self
     ):
 
@@ -284,9 +323,38 @@ class SQLGenerator:
             "target_table":
                 f"{schema}.{target_table}",
 
-            "timezone":
-                (
-                    self.global_config.
-                    source_timezone
-                )
+            "source_timezone":
+                self.global_config
+                .source_timezone,
+
+            "target_timezone":
+                self.global_config
+                .target_timezone,
+
+            "timestamp_columns":
+                self.table_context[
+                    "timestamp_columns"
+                ],
+
+            "all_columns":
+                self.table_context[
+                    "all_columns"
+                ]
+        }
+
+    ###########################################################################
+    # DEBUG SQL
+    ###########################################################################
+
+    def build_debug_sql(
+        self
+    ):
+
+        return {
+
+            "range_sql":
+                self.build_range_insert_sql(),
+
+            "null_chunk_sql":
+                self.build_null_chunk_sql()
         }

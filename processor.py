@@ -5,6 +5,17 @@ Checkpoint manager
 Statistics collector
 Chunk processor
 
+Design Goals
+------------
+✓ Atomic checkpoint updates
+✓ Thread-safe statistics
+✓ INSERT ... ON CONFLICT DO NOTHING
+✓ No per-chunk COUNT(*)
+✓ RowsInserted only
+✓ NULL chunk support
+✓ Transaction rollback on failure
+✓ Connection-per-worker model
+
 Author: Timezone Conversion Loader
 """
 
@@ -12,22 +23,18 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 import time
 
 from dataclasses import dataclass
 from datetime import datetime
 
-from metadata import (
-    MetadataRepository,
-    get_connection
-)
-
+from metadata import MetadataRepository, get_connection
 
 ###############################################################################
-# RESULT OBJECT
+# CHUNK RESULT
 ###############################################################################
+
 
 @dataclass
 class ChunkResult:
@@ -47,11 +54,12 @@ class ChunkResult:
 # STATISTICS COLLECTOR
 ###############################################################################
 
+
 class StatisticsCollector:
 
     def __init__(self):
 
-        self.lock = threading.Lock()
+        self._lock = threading.Lock()
 
         self.completed_chunks = 0
 
@@ -61,100 +69,104 @@ class StatisticsCollector:
 
         self.null_chunk_processed = False
 
-    def record_success(
-        self,
-        chunk,
-        result
-    ):
+    ###########################################################################
+    # SUCCESS
+    ###########################################################################
 
-        with self.lock:
+    def record_success(self, chunk, result: ChunkResult):
+
+        with self._lock:
 
             self.completed_chunks += 1
 
-            self.total_rows_loaded += (
-                result.rows_inserted
-            )
+            self.total_rows_loaded += result.rows_inserted
 
             if chunk.is_null_chunk:
 
                 self.null_chunk_processed = True
 
+    ###########################################################################
+    # FAILURE
+    ###########################################################################
+
     def record_failure(self):
 
-        with self.lock:
+        with self._lock:
 
             self.failed_chunks += 1
+
+    ###########################################################################
+    # SNAPSHOT
+    ###########################################################################
+
+    def snapshot(self):
+
+        with self._lock:
+
+            return {
+                "completed_chunks": self.completed_chunks,
+                "failed_chunks": self.failed_chunks,
+                "total_rows_loaded": self.total_rows_loaded,
+                "null_chunk_processed": self.null_chunk_processed,
+            }
 
 
 ###############################################################################
 # CHECKPOINT MANAGER
 ###############################################################################
 
+
 class CheckpointManager:
 
-    def __init__(
-        self,
-        checkpoint_file
-    ):
+    def __init__(self, checkpoint_file: str):
 
-        self.checkpoint_file = (
-            checkpoint_file
-        )
+        self.checkpoint_file = checkpoint_file
 
-        self.lock = threading.Lock()
+        self._lock = threading.Lock()
 
-    def update(
-        self,
-        chunk,
-        rows_inserted
-    ):
+    ###########################################################################
+    # UPDATE
+    ###########################################################################
+
+    def update(self, chunk, rows_inserted):
 
         payload = {
-
-            "last_completed_chunk":
-                chunk.chunk_number,
-
-            "rows_inserted":
-                rows_inserted,
-
-            "last_successful_predicate":
-                chunk.predicate,
-
-            "last_update_time":
-                datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+            "last_completed_chunk": chunk.chunk_number,
+            "last_successful_predicate": chunk.predicate,
+            "rows_inserted": rows_inserted,
+            "last_update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
-        tmp_file = (
-            self.checkpoint_file
-            +
-            ".tmp"
-        )
+        tmp_file = self.checkpoint_file + ".tmp"
 
-        with self.lock:
+        os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
 
-            with open(
-                tmp_file,
-                "w",
-                encoding="utf-8"
-            ) as handle:
+        with self._lock:
 
-                json.dump(
-                    payload,
-                    handle,
-                    indent=4
-                )
+            with open(tmp_file, "w", encoding="utf-8") as handle:
 
-            os.replace(
-                tmp_file,
-                self.checkpoint_file
-            )
+                json.dump(payload, handle, indent=4)
+
+            os.replace(tmp_file, self.checkpoint_file)
+
+    ###########################################################################
+    # LOAD
+    ###########################################################################
+
+    def load(self):
+
+        if not os.path.exists(self.checkpoint_file):
+            return None
+
+        with open(self.checkpoint_file, "r", encoding="utf-8") as handle:
+
+            return json.load(handle)
 
 
 ###############################################################################
 # CHUNK PROCESSOR
 ###############################################################################
+
 
 class ChunkProcessor:
 
@@ -165,228 +177,136 @@ class ChunkProcessor:
         logger,
         sql_generator,
         checkpoint_manager,
-        statistics
+        statistics,
     ):
 
-        self.global_config = (
-            global_config
-        )
+        self.global_config = global_config
 
-        self.table_config = (
-            table_config
-        )
+        self.table_config = table_config
 
         self.logger = logger
 
-        self.sql_generator = (
-            sql_generator
-        )
+        self.sql_generator = sql_generator
 
-        self.checkpoint_manager = (
-            checkpoint_manager
-        )
+        self.checkpoint_manager = checkpoint_manager
 
-        self.statistics = (
-            statistics
-        )
+        self.statistics = statistics
 
     ###########################################################################
-    # EXECUTE ONE CHUNK
+    # PROCESS SINGLE CHUNK
     ###########################################################################
 
-    def process_chunk(
-        self,
-        chunk
-    ):
+    def process_chunk(self, chunk) -> ChunkResult:
 
         start_time = time.time()
 
         try:
 
-            with get_connection(
-                self.global_config
-            ) as conn:
+            with get_connection(self.global_config) as conn:
 
-                metadata = (
-                    MetadataRepository(
-                        conn
-                    )
-                )
+                metadata = MetadataRepository(conn)
 
                 metadata.configure_session(
-
-                    self.global_config.
-                    statement_timeout_ms,
-
-                    self.global_config.
-                    lock_timeout_ms
+                    self.global_config.statement_timeout_ms,
+                    self.global_config.lock_timeout_ms,
                 )
 
                 with conn.cursor() as cur:
 
-                    ###########################################################
-                    # BUILD SQL
-                    ###########################################################
+                    ###################################################################
+                    # SQL
+                    ###################################################################
 
                     if chunk.is_null_chunk:
 
-                        sql_text = (
-                            self.sql_generator
-                            .build_null_chunk_sql()
-                        )
+                        sql_text = self.sql_generator.build_null_chunk_sql()
 
-                        bind_values = None
+                        cur.execute(sql_text)
 
                     else:
 
-                        sql_text = (
-                            self.sql_generator
-                            .build_range_insert_sql()
-                        )
+                        sql_text = self.sql_generator.build_range_insert_sql()
 
-                        bind_values = (
+                        cur.execute(sql_text, (chunk.start_value, chunk.end_value))
 
-                            chunk.start_value,
+                    ###################################################################
+                    # ROWCOUNT
+                    ###################################################################
 
-                            chunk.end_value
-                        )
+                    rows_inserted = cur.rowcount
 
-                    ###########################################################
-                    # EXECUTE
-                    ###########################################################
-
-                    if bind_values:
-
-                        cur.execute(
-                            sql_text,
-                            bind_values
-                        )
-
-                    else:
-
-                        cur.execute(
-                            sql_text
-                        )
-
-                    ###########################################################
-                    # INSERTED ROWS
-                    ###########################################################
-
-                    rows_inserted = (
-                        cur.rowcount
-                    )
-
-                    ###########################################################
+                    ###################################################################
                     # COMMIT
-                    ###########################################################
+                    ###################################################################
 
                     conn.commit()
 
-                ###############################################################
+                #######################################################################
                 # CHECKPOINT
-                ###############################################################
+                #######################################################################
 
-                self.checkpoint_manager.update(
+                self.checkpoint_manager.update(chunk, rows_inserted)
 
-                    chunk,
-
-                    rows_inserted
-                )
-
-                ###############################################################
-                # RESULT
-                ###############################################################
-
-                duration = int(
-
-                    time.time()
-                    -
-                    start_time
-                )
+                duration = int(time.time() - start_time)
 
                 result = ChunkResult(
-
-                    chunk_number=
-                        chunk.chunk_number,
-
-                    rows_inserted=
-                        rows_inserted,
-
-                    duration_seconds=
-                        duration,
-
-                    success=True
+                    chunk_number=chunk.chunk_number,
+                    rows_inserted=rows_inserted,
+                    duration_seconds=duration,
+                    success=True,
                 )
 
-                ###############################################################
-                # STATS
-                ###############################################################
+                self.statistics.record_success(chunk, result)
 
-                self.statistics.record_success(
+                if chunk.is_null_chunk:
 
-                    chunk,
+                    self.logger.info(
+                        f"Chunk={chunk.chunk_number} "
+                        f"Range=[NULL_ROWS] "
+                        f"RowsInserted={rows_inserted} "
+                        f"Duration={duration}s "
+                        f"Status=COMPLETED"
+                    )
 
-                    result
-                )
+                else:
 
-                ###############################################################
-                # LOG
-                ###############################################################
+                    progress_pct = (chunk.chunk_number / chunk.total_chunks) * 100
 
-                self.logger.info(
-
-                    f"Chunk="
-                    f"{chunk.chunk_number} "
-
-                    f"RowsInserted="
-                    f"{rows_inserted} "
-
-                    f"Duration="
-                    f"{duration}s "
-
-                    f"Status=COMPLETED"
-                )
+                    self.logger.info(
+                        f"Chunk={chunk.chunk_number}/{chunk.total_chunks} "
+                        f"({progress_pct:.1f}%) "
+                        f"Range=[{chunk.start_value} <= "
+                        f"{self.table_config.driving_column} < "
+                        f"{chunk.end_value}] "
+                        f"RowsInserted={rows_inserted} "
+                        f"Duration={duration}s "
+                        f"Status=COMPLETED"
+                    )
 
                 return result
 
         except Exception as ex:
 
-            duration = int(
-
-                time.time()
-                -
-                start_time
-            )
+            duration = int(time.time() - start_time)
 
             self.statistics.record_failure()
 
             self.logger.error(
-
                 f"Chunk="
                 f"{chunk.chunk_number} "
-
-                f"Status=FAILED "
-
                 f"Duration="
                 f"{duration}s "
-
-                f"Error={str(ex)}"
+                f"Status=FAILED "
+                f"Error="
+                f"{str(ex)}"
             )
 
             return ChunkResult(
-
-                chunk_number=
-                    chunk.chunk_number,
-
+                chunk_number=chunk.chunk_number,
                 rows_inserted=0,
-
-                duration_seconds=
-                    duration,
-
+                duration_seconds=duration,
                 success=False,
-
-                error_message=
-                    str(ex)
+                error_message=str(ex),
             )
 
 
@@ -394,33 +314,11 @@ class ChunkProcessor:
 # TABLE CONTEXT BUILDER
 ###############################################################################
 
-def build_table_context(
-    metadata_repository,
-    schema,
-    table_name
-):
 
-    all_columns = (
-        metadata_repository
-        .get_all_columns(
-            schema,
-            table_name
-        )
-    )
+def build_table_context(metadata_repository, schema, table_name):
 
-    timestamp_columns = (
-        metadata_repository
-        .get_timestamp_columns(
-            schema,
-            table_name
-        )
-    )
+    all_columns = metadata_repository.get_all_columns(schema, table_name)
 
-    return {
+    timestamp_columns = metadata_repository.get_timestamp_columns(schema, table_name)
 
-        "all_columns":
-            all_columns,
-
-        "timestamp_columns":
-            timestamp_columns
-    }
+    return {"all_columns": all_columns, "timestamp_columns": timestamp_columns}

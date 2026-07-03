@@ -1,7 +1,7 @@
 """
 config.py
 
-Configuration models, validation and config loading.
+Configuration models, validation and configuration loading.
 
 Author: Timezone Conversion Loader
 """
@@ -12,13 +12,9 @@ import json
 import os
 import re
 
-from dataclasses import dataclass
-from dataclasses import field
-
-from typing import List
-from typing import Optional
-
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import List, Optional
 
 
 ###############################################################################
@@ -26,9 +22,7 @@ from datetime import datetime
 ###############################################################################
 
 class ConfigValidationError(Exception):
-    """
-    Raised when configuration validation fails.
-    """
+    """Raised when configuration validation fails."""
     pass
 
 
@@ -40,21 +34,14 @@ class ConfigValidationError(Exception):
 class DatabaseConfig:
 
     host: str
-
     port: int
-
     dbname: str
-
     username: str
-
     password: str
 
     sslmode: Optional[str] = None
-
     sslrootcert: Optional[str] = None
-
     sslcert: Optional[str] = None
-
     sslkey: Optional[str] = None
 
     connect_timeout: int = 30
@@ -107,17 +94,13 @@ class GlobalConfig:
 
     max_parallel_tables: int = 1
 
-    max_db_connections: int = 30
+    max_db_connections: int = 20
 
     max_failed_chunks: int = 100
 
-    statement_timeout_ms: int = (
-        7200000
-    )
+    statement_timeout_ms: int = 7200000
 
-    lock_timeout_ms: int = (
-        300000
-    )
+    lock_timeout_ms: int = 300000
 
     tables: List[TableConfig] = field(
         default_factory=list
@@ -125,7 +108,7 @@ class GlobalConfig:
 
 
 ###############################################################################
-# VALIDATION
+# CONSTANTS
 ###############################################################################
 
 SUPPORTED_STARTVALUE_FORMATS = [
@@ -135,11 +118,14 @@ SUPPORTED_STARTVALUE_FORMATS = [
     "%d-%m-%Y %H:%M:%S"
 ]
 
-
 CHUNK_SIZE_PATTERN = re.compile(
     r"^[0-9]+[DdWwMmYy]$"
 )
 
+
+###############################################################################
+# VALIDATION HELPERS
+###############################################################################
 
 def validate_required_string(
     value,
@@ -159,17 +145,32 @@ def validate_required_string(
         )
 
 
+def validate_positive_integer(
+    value,
+    field_name
+):
+
+    if not isinstance(value, int):
+
+        raise ConfigValidationError(
+            f"{field_name} must be integer"
+        )
+
+    if value <= 0:
+
+        raise ConfigValidationError(
+            f"{field_name} must be > 0"
+        )
+
+
 def validate_startvalue(
     startvalue
 ):
 
     if startvalue is None:
-
         return
 
-    for fmt in (
-        SUPPORTED_STARTVALUE_FORMATS
-    ):
+    for fmt in SUPPORTED_STARTVALUE_FORMATS:
 
         try:
 
@@ -181,19 +182,14 @@ def validate_startvalue(
             return
 
         except ValueError:
-
             pass
 
     raise ConfigValidationError(
 
-        f"Invalid startvalue: "
-        f"{startvalue}"
-
-        "\nSupported formats:"
-
-        "\nDD-MM-YYYY"
-
-        "\nDD-MM-YYYY HH:MM:SS"
+        f"Invalid startvalue [{startvalue}]. "
+        "Supported formats are "
+        "DD-MM-YYYY and "
+        "DD-MM-YYYY HH:MM:SS"
     )
 
 
@@ -207,36 +203,50 @@ def validate_chunk_size(
 
         raise ConfigValidationError(
 
-            f"Invalid chunk size: "
-
-            f"{chunk_size}"
-
-            "\nExamples:"
-
-            "\n1D"
-
-            "\n7D"
-
-            "\n1W"
-
-            "\n1M"
-
-            "\n1Y"
+            f"Invalid chunk_size [{chunk_size}] "
+            "Examples: 1D, 7D, 1W, 1M, 1Y"
         )
 
 
-def validate_positive_integer(
-    value,
-    field_name
-):
+###############################################################################
+# DATABASE VALIDATOR
+###############################################################################
 
-    if value <= 0:
+class DatabaseConfigValidator:
 
-        raise ConfigValidationError(
+    @staticmethod
+    def validate(
+        db_cfg: DatabaseConfig
+    ):
 
-            f"{field_name} "
+        validate_required_string(
+            db_cfg.host,
+            "database.host"
+        )
 
-            f"must be greater than zero"
+        validate_required_string(
+            db_cfg.dbname,
+            "database.dbname"
+        )
+
+        validate_required_string(
+            db_cfg.username,
+            "database.username"
+        )
+
+        validate_required_string(
+            db_cfg.password,
+            "database.password"
+        )
+
+        validate_positive_integer(
+            db_cfg.port,
+            "database.port"
+        )
+
+        validate_positive_integer(
+            db_cfg.connect_timeout,
+            "database.connect_timeout"
         )
 
 
@@ -291,9 +301,18 @@ class GlobalConfigValidator:
         cfg: GlobalConfig
     ):
 
+        DatabaseConfigValidator.validate(
+            cfg.database
+        )
+
         validate_required_string(
             cfg.source_timezone,
             "source_timezone"
+        )
+
+        validate_required_string(
+            cfg.target_timezone,
+            "target_timezone"
         )
 
         validate_required_string(
@@ -317,6 +336,11 @@ class GlobalConfigValidator:
         )
 
         validate_positive_integer(
+            cfg.max_failed_chunks,
+            "max_failed_chunks"
+        )
+
+        validate_positive_integer(
             cfg.statement_timeout_ms,
             "statement_timeout_ms"
         )
@@ -332,51 +356,11 @@ class GlobalConfigValidator:
                 "No tables configured."
             )
 
-        GlobalConfigValidator.\
-            validate_database(
-                cfg.database
-            )
-
         for table_cfg in cfg.tables:
 
             TableConfigValidator.validate(
                 table_cfg
             )
-
-    @staticmethod
-    def validate_database(
-        db_cfg: DatabaseConfig
-    ):
-
-        validate_required_string(
-            db_cfg.host,
-            "database.host"
-        )
-
-        validate_required_string(
-            db_cfg.dbname,
-            "database.dbname"
-        )
-
-        validate_required_string(
-            db_cfg.username,
-            "database.username"
-        )
-
-        validate_required_string(
-            db_cfg.password,
-            "database.password"
-        )
-
-        validate_positive_integer(
-            db_cfg.port,
-            "database.port"
-        )
-
-        validate_positive_integer(
-            db_cfg.connect_timeout,
-            "connect_timeout"
-        )
 
 
 ###############################################################################
@@ -406,50 +390,50 @@ class ConfigLoader:
 
             raw = json.load(handle)
 
+        db_raw = raw["database"]
+
         database = DatabaseConfig(
 
-            host=raw["database"]["host"],
+            host=db_raw["host"],
 
-            port=raw["database"]["port"],
+            port=int(
+                db_raw["port"]
+            ),
 
-            dbname=raw["database"]["dbname"],
+            dbname=db_raw["dbname"],
 
-            username=raw["database"]["username"],
+            username=db_raw["username"],
 
-            password=raw["database"]["password"],
+            password=db_raw["password"],
 
-            sslmode=raw["database"].get(
+            sslmode=db_raw.get(
                 "sslmode"
             ),
 
-            sslrootcert=raw["database"].get(
+            sslrootcert=db_raw.get(
                 "sslrootcert"
             ),
 
-            sslcert=raw["database"].get(
+            sslcert=db_raw.get(
                 "sslcert"
             ),
 
-            sslkey=raw["database"].get(
+            sslkey=db_raw.get(
                 "sslkey"
             ),
 
-            connect_timeout=raw[
-                "database"
-            ].get(
+            connect_timeout=db_raw.get(
                 "connect_timeout",
                 30
             ),
 
-            application_name=raw[
-                "database"
-            ].get(
+            application_name=db_raw.get(
                 "application_name",
                 "timezone_conversion_loader"
             )
         )
 
-        tables = []
+        tables: List[TableConfig] = []
 
         for table in raw["tables"]:
 
@@ -522,7 +506,7 @@ class ConfigLoader:
 
             max_db_connections=raw.get(
                 "max_db_connections",
-                30
+                20
             ),
 
             max_failed_chunks=raw.get(

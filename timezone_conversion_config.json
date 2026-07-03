@@ -1,0 +1,132 @@
+{
+  "_CONFIG_DESCRIPTION": "Timezone Conversion Loader Configuration",
+
+  "_DATABASE_SECTION": "=================================================================",
+  "_DATABASE_MANDATORY": "The following parameters are mandatory",
+
+  "database": {
+
+    "_host": "MANDATORY - PostgreSQL hostname or IP",
+    "host": "your-postgresql-host",
+
+    "_port": "MANDATORY - PostgreSQL listener port",
+    "port": 5432,
+
+    "_dbname": "MANDATORY - Database name",
+    "dbname": "your_database",
+
+    "_username": "MANDATORY - Database username",
+    "username": "your_username",
+
+    "_password": "MANDATORY - Database password",
+    "password": "your_password",
+
+    "_sslmode": "OPTIONAL - disable | allow | prefer | require | verify-ca | verify-full",
+    "sslmode": "require",
+
+    "_sslrootcert": "OPTIONAL - Root CA certificate",
+    "sslrootcert": "/certs/root.crt",
+
+    "_sslcert": "OPTIONAL - Client certificate",
+    "sslcert": "/certs/client.crt",
+
+    "_sslkey": "OPTIONAL - Client private key",
+    "sslkey": "/certs/client.key",
+
+    "_connect_timeout": "OPTIONAL - Connection timeout in seconds (Default=30)",
+    "connect_timeout": 30,
+
+    "_application_name": "OPTIONAL - Appears in pg_stat_activity",
+    "application_name": "timezone_conversion_loader"
+  },
+
+  "_GLOBAL_SECTION": "=================================================================",
+
+  "_source_timezone": "MANDATORY - Timezone currently stored in the source table timestamps",
+  "source_timezone": "Australia/Sydney",
+
+  "_target_timezone": "OPTIONAL - Target timezone (Default=UTC)",
+  "target_timezone": "UTC",
+
+  "_newtablenamesuffix": "OPTIONAL - Suffix appended to generated target tables",
+  "newtablenamesuffix": "_utc",
+
+  "_log_directory": "OPTIONAL - Log, checkpoint and summary location",
+  "log_directory": "./logs",
+
+  "_max_parallel_tables": "OPTIONAL - Future enhancement. Current implementation processes tables sequentially. Default=1",
+  "max_parallel_tables": 1,
+
+  "_max_db_connections": "OPTIONAL - Maximum database connections allowed",
+  "max_db_connections": 20,
+
+  "_max_failed_chunks": "OPTIONAL - Stop processing if failures exceed this threshold",
+  "max_failed_chunks": 100,
+
+  "_statement_timeout_ms": "OPTIONAL - PostgreSQL statement timeout in milliseconds",
+  "statement_timeout_ms": 7200000,
+
+  "_lock_timeout_ms": "OPTIONAL - PostgreSQL lock timeout in milliseconds",
+  "lock_timeout_ms": 300000,
+
+  "_TABLES_SECTION": "=================================================================",
+
+  "tables": [
+
+    {
+      "_TABLE_DESCRIPTION": "Large transactional table",
+
+      "_schema": "MANDATORY - Table schema",
+      "schema": "public",
+
+      "_table_name": "MANDATORY - Source table name",
+      "table_name": "orders",
+
+      "_driving_column": "MANDATORY - timestamp without time zone column used for chunking",
+      "driving_column": "created_dt",
+
+      "_chunk_size": "MANDATORY - Supported values: D,W,M,Y. Examples: 1D,7D,1W,1M,1Y",
+      "chunk_size": "7D",
+
+      "_parallel_threads": "OPTIONAL - Worker thread count (Default=1)",
+      "parallel_threads": 4,
+
+      "_startvalue": "OPTIONAL - Restart point. Supported formats: DD-MM-YYYY or DD-MM-YYYY HH:MM:SS",
+      "startvalue": "01-01-2024",
+
+      "_validate_rowcount": "OPTIONAL - Compare source and target rowcount at table completion",
+      "validate_rowcount": true,
+
+      "_analyze_after_load": "OPTIONAL - Execute ANALYZE on target table after load",
+      "analyze_after_load": true
+    },
+
+    {
+      "_TABLE_DESCRIPTION": "Smaller reference table",
+
+      "_schema": "MANDATORY",
+      "schema": "public",
+
+      "_table_name": "MANDATORY",
+      "table_name": "customers",
+
+      "_driving_column": "MANDATORY",
+      "driving_column": "last_updated",
+
+      "_chunk_size": "MANDATORY",
+      "chunk_size": "1M",
+
+      "_parallel_threads": "OPTIONAL",
+      "parallel_threads": 2,
+
+      "_startvalue": "OPTIONAL",
+      "startvalue": null,
+
+      "_validate_rowcount": "OPTIONAL",
+      "validate_rowcount": false,
+
+      "_analyze_after_load": "OPTIONAL",
+      "analyze_after_load": false
+    }
+  ]
+}
