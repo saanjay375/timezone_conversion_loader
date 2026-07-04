@@ -44,8 +44,6 @@ class SummaryStatus(Enum):
 ###############################################################################
 
 
-<<<<<<< HEAD
-=======
 @dataclass
 class OperationInfo:
 
@@ -62,7 +60,6 @@ class OperationInfo:
     driving_column: str
 
 
->>>>>>> 2036b50 (Updated logging)
 @dataclass
 class SummaryFile:
 
@@ -112,9 +109,6 @@ class SummaryFile:
 
 class SummaryManager:
 
-<<<<<<< HEAD
-    def __init__(self, global_config, table_config, logger):
-=======
     def __init__(
         self,
         global_config,
@@ -122,7 +116,6 @@ class SummaryManager:
         logger,
         timestamp_columns=None,
     ):
->>>>>>> 2036b50 (Updated logging)
 
         self.global_config = global_config
 
@@ -180,8 +173,6 @@ class SummaryManager:
 
         target_table = (
             self.table_config.table_name + self.global_config.newtablenamesuffix
-<<<<<<< HEAD
-=======
         )
 
         operation = OperationInfo(
@@ -191,18 +182,12 @@ class SummaryManager:
             updated_columns=self.timestamp_columns,
             updated_column_count=len(self.timestamp_columns),
             driving_column=self.table_config.driving_column,
->>>>>>> 2036b50 (Updated logging)
         )
 
         return SummaryFile(
             schema=self.table_config.schema,
             source_table=self.table_config.table_name,
             target_table=target_table,
-<<<<<<< HEAD
-            source_timezone=self.global_config.source_timezone,
-            target_timezone=self.global_config.target_timezone,
-=======
->>>>>>> 2036b50 (Updated logging)
             status=self.determine_status(statistics, execution_failed).value,
             driving_column=self.table_config.driving_column,
             chunk_size=self.table_config.chunk_size,
@@ -218,10 +203,7 @@ class SummaryManager:
             start_time=start_time,
             end_time=end_time,
             duration_seconds=duration_seconds,
-<<<<<<< HEAD
-=======
             operation=operation,
->>>>>>> 2036b50 (Updated logging)
         )
 
     ###########################################################################
@@ -229,11 +211,6 @@ class SummaryManager:
     ###########################################################################
     def operation_to_dict(self, operation: OperationInfo | None):
 
-<<<<<<< HEAD
-    def to_dict(self, summary: SummaryFile):
-
-        return {
-=======
         if operation is None:
 
             return None
@@ -250,7 +227,6 @@ class SummaryManager:
     def to_dict(self, summary: SummaryFile):
 
         return {
->>>>>>> 2036b50 (Updated logging)
             ###################################################################
             # TABLE
             ###################################################################
@@ -260,12 +236,7 @@ class SummaryManager:
             ###################################################################
             # OPERATION
             ###################################################################
-<<<<<<< HEAD
-            "source_timezone": summary.source_timezone,
-            "target_timezone": summary.target_timezone,
-=======
             "operation": self.operation_to_dict(summary.operation),
->>>>>>> 2036b50 (Updated logging)
             ###################################################################
             # STATUS
             ###################################################################
