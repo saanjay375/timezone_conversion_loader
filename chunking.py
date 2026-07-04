@@ -156,6 +156,68 @@ def add_months(source_date: datetime, months: int) -> datetime:
     return source_date.replace(year=year, month=month, day=day)
 
 
+def next_day_start(dt: datetime) -> datetime:
+
+    return datetime(dt.year, dt.month, dt.day) + timedelta(days=1)
+
+
+def next_iso_week_start(dt: datetime) -> datetime:
+
+    days_until_monday = 7 - dt.weekday()
+
+    return datetime(dt.year, dt.month, dt.day) + timedelta(days=days_until_monday)
+
+
+def next_month_start(dt: datetime) -> datetime:
+
+    if dt.month == 12:
+
+        return datetime(dt.year + 1, 1, 1)
+
+    return datetime(dt.year, dt.month + 1, 1)
+
+
+def next_year_start(dt: datetime) -> datetime:
+
+    return datetime(dt.year + 1, 1, 1)
+
+
+def first_aligned_boundary(current_date: datetime, chunk_unit: str) -> datetime:
+
+    if chunk_unit == "D":
+        return next_day_start(current_date)
+
+    if chunk_unit == "W":
+        return next_iso_week_start(current_date)
+
+    if chunk_unit == "M":
+        return next_month_start(current_date)
+
+    if chunk_unit == "Y":
+        return next_year_start(current_date)
+
+    raise ChunkGenerationError(f"Unsupported chunk unit: {chunk_unit}")
+
+
+def advance_aligned_boundary(
+    boundary: datetime, chunk_value: int, chunk_unit: str
+) -> datetime:
+
+    if chunk_unit == "D":
+        return boundary + timedelta(days=chunk_value)
+
+    if chunk_unit == "W":
+        return boundary + timedelta(weeks=chunk_value)
+
+    if chunk_unit == "M":
+        return add_months(boundary, chunk_value)
+
+    if chunk_unit == "Y":
+        return add_years(boundary, chunk_value)
+
+    raise ChunkGenerationError(f"Unsupported chunk unit: {chunk_unit}")
+
+
 def add_years(source_date: datetime, years: int) -> datetime:
 
     try:
@@ -232,6 +294,8 @@ def generate_chunks(
 
     chunk_number = 1
 
+    max_boundary = max_value + timedelta(microseconds=1)
+
     ###########################################################################
     # SPECIAL CASE
     #
@@ -243,11 +307,9 @@ def generate_chunks(
         chunks.append(
             Chunk(
                 chunk_number=chunk_number,
-                predicate=build_chunk_predicate(
-                    start_value, max_value + timedelta(microseconds=1)
-                ),
+                predicate=build_chunk_predicate(start_value, max_boundary),
                 start_value=start_value,
-                end_value=(max_value + timedelta(microseconds=1)),
+                end_value=max_boundary,
                 is_null_chunk=False,
             )
         )
@@ -260,40 +322,84 @@ def generate_chunks(
 
     else:
 
-        current = start_value
+        first_boundary = first_aligned_boundary(start_value, chunk_unit)
 
-        while current <= max_value:
+        #######################################################################
+        # CASE 1
+        #
+        # Entire range fits before first aligned boundary.
+        #
+        # Example:
+        # start = 14-Feb-2024
+        # max   = 15-Feb-2024
+        # chunk = 1Y
+        #######################################################################
 
-            next_boundary = compute_next_boundary(current, chunk_value, chunk_unit)
-
-            ###################################################################
-            # FINAL CHUNK
-            #
-            # We extend boundary by 1 microsecond so that rows exactly equal to
-            # MAX(driving_column) are included.
-            ###################################################################
-
-            if next_boundary > max_value:
-
-                next_boundary = max_value + timedelta(microseconds=1)
+        if first_boundary >= max_boundary:
 
             chunks.append(
                 Chunk(
                     chunk_number=chunk_number,
-                    predicate=build_chunk_predicate(current, next_boundary),
-                    start_value=current,
-                    end_value=next_boundary,
+                    predicate=build_chunk_predicate(start_value, max_boundary),
+                    start_value=start_value,
+                    end_value=max_boundary,
                     is_null_chunk=False,
                 )
             )
 
             chunk_number += 1
 
-            current = next_boundary
+        else:
 
-            if current > max_value:
+            ###################################################################
+            # FIRST CHUNK
+            #
+            # Actual start -> first aligned boundary
+            ###################################################################
 
-                break
+            chunks.append(
+                Chunk(
+                    chunk_number=chunk_number,
+                    predicate=build_chunk_predicate(start_value, first_boundary),
+                    start_value=start_value,
+                    end_value=first_boundary,
+                    is_null_chunk=False,
+                )
+            )
+
+            chunk_number += 1
+
+            current_boundary = first_boundary
+
+            ###################################################################
+            # ALIGNED CHUNKS
+            ###################################################################
+
+            while current_boundary < max_boundary:
+
+                next_boundary = advance_aligned_boundary(
+                    current_boundary, chunk_value, chunk_unit
+                )
+
+                actual_end = min(next_boundary, max_boundary)
+
+                chunks.append(
+                    Chunk(
+                        chunk_number=chunk_number,
+                        predicate=build_chunk_predicate(current_boundary, actual_end),
+                        start_value=current_boundary,
+                        end_value=actual_end,
+                        is_null_chunk=False,
+                    )
+                )
+
+                chunk_number += 1
+
+                if actual_end >= max_boundary:
+
+                    break
+
+                current_boundary = next_boundary
 
     ###########################################################################
     # NULL CHUNK
@@ -310,9 +416,11 @@ def generate_chunks(
             is_null_chunk=True,
         )
     )
+
     total_chunks = len(chunks)
 
     for chunk in chunks:
+
         chunk.total_chunks = total_chunks
 
     return chunks
