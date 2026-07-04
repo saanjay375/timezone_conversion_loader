@@ -31,6 +31,9 @@ from chunking import generate_chunks, convert_startvalue, build_chunk_queue
 
 from sql_generator import SQLGenerator
 
+from paths import get_checkpoint_file
+from paths import get_execution_log_file
+
 from processor import (
     StatisticsCollector,
     CheckpointManager,
@@ -317,7 +320,10 @@ class TableProcessor:
                 stats = StatisticsCollector()
 
                 SummaryManager(
-                    self.global_config, self.table_config, self.logger
+                    self.global_config,
+                    self.table_config,
+                    self.logger,
+                    [],
                 ).create_summary(
                     statistics=stats,
                     total_chunks=0,
@@ -343,6 +349,7 @@ class TableProcessor:
             table_context = build_table_context(
                 repo, self.table_config.schema, self.table_config.table_name
             )
+            timestamp_columns = table_context["timestamp_columns"]
 
         #######################################################################
         # PROCESSING OBJECTS
@@ -351,13 +358,11 @@ class TableProcessor:
         statistics = StatisticsCollector()
 
         checkpoint = CheckpointManager(
-            os.path.join(
-                self.global_config.log_directory,
-                (
-                    f"{self.table_config.schema}."
-                    f"{self.table_config.table_name}"
-                    ".checkpoint.json"
-                ),
+            str(
+                get_checkpoint_file(
+                    self.table_config.schema,
+                    self.table_config.table_name,
+                )
             )
         )
 
@@ -435,7 +440,10 @@ class TableProcessor:
         #######################################################################
 
         SummaryManager(
-            self.global_config, self.table_config, self.logger
+            self.global_config,
+            self.table_config,
+            self.logger,
+            timestamp_columns,
         ).create_summary(
             statistics=statistics,
             total_chunks=len(chunks),
@@ -461,9 +469,11 @@ class MigrationController:
 
         for table_cfg in self.global_config.tables:
 
-            logfile = os.path.join(
-                self.global_config.log_directory,
-                (f"{table_cfg.schema}." f"{table_cfg.table_name}.log"),
+            logfile = str(
+                get_execution_log_file(
+                    table_cfg.schema,
+                    table_cfg.table_name,
+                )
             )
 
             logger = LoggerFactory.build_logger(
