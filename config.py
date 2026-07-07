@@ -57,6 +57,20 @@ class DatabaseConfig:
 
 
 @dataclass
+class OperationConfig:
+
+    type: str
+
+    source_timezone: str | None = None
+
+    target_timezone: str | None = None
+
+    target_table_suffix: str | None = None
+
+    tables: list["TableConfig"] = field(default_factory=list)
+
+
+@dataclass
 class TableConfig:
 
     schema: str
@@ -86,12 +100,6 @@ class GlobalConfig:
 
     database: DatabaseConfig
 
-    source_timezone: str
-
-    target_timezone: str = "UTC"
-
-    newtablenamesuffix: str = "_utc"
-
     max_parallel_tables: int = 1
 
     max_db_connections: int = 20
@@ -102,7 +110,7 @@ class GlobalConfig:
 
     lock_timeout_ms: int = 300000
 
-    tables: List[TableConfig] = field(default_factory=list)
+    operations: list[OperationConfig] = field(default_factory=list)
 
 
 ###############################################################################
@@ -231,12 +239,21 @@ class GlobalConfigValidator:
     def validate(cfg: GlobalConfig):
 
         DatabaseConfigValidator.validate(cfg.database)
+        if not cfg.operations:
 
-        validate_required_string(cfg.source_timezone, "source_timezone")
+            raise ConfigValidationError("No operations configured.")
 
-        validate_required_string(cfg.target_timezone, "target_timezone")
+        for operation in cfg.operations:
 
-        validate_required_string(cfg.newtablenamesuffix, "newtablenamesuffix")
+            if not operation.tables:
+
+                raise ConfigValidationError(
+                    f"Operation [{operation.type}] has no tables."
+                )
+
+            for table_cfg in operation.tables:
+
+                TableConfigValidator.validate(table_cfg)
 
         validate_positive_integer(cfg.max_parallel_tables, "max_parallel_tables")
 
@@ -247,14 +264,6 @@ class GlobalConfigValidator:
         validate_positive_integer(cfg.statement_timeout_ms, "statement_timeout_ms")
 
         validate_positive_integer(cfg.lock_timeout_ms, "lock_timeout_ms")
-
-        if not cfg.tables:
-
-            raise ConfigValidationError("No tables configured.")
-
-        for table_cfg in cfg.tables:
-
-            TableConfigValidator.validate(table_cfg)
 
 
 ###############################################################################
@@ -293,34 +302,75 @@ class ConfigLoader:
             ),
         )
 
-        tables: List[TableConfig] = []
+        operations: List[OperationConfig] = []
 
-        for table in raw["tables"]:
+        for operation in raw["operations"]:
 
-            tables.append(
-                TableConfig(
-                    schema=table["schema"],
-                    table_name=table["table_name"],
-                    driving_column=table["driving_column"],
-                    chunk_size=table["chunk_size"],
-                    parallel_threads=table.get("parallel_threads", 1),
-                    startvalue=table.get("startvalue"),
-                    validate_rowcount=table.get("validate_rowcount", False),
-                    analyze_after_load=table.get("analyze_after_load", False),
+            op_tables: List[TableConfig] = []
+
+            for table in operation["tables"]:
+
+                op_tables.append(
+                    TableConfig(
+                        schema=table["schema"],
+                        table_name=table["table_name"],
+                        driving_column=table["driving_column"],
+                        chunk_size=table["chunk_size"],
+                        parallel_threads=table.get(
+                            "parallel_threads",
+                            1,
+                        ),
+                        startvalue=table.get("startvalue"),
+                        validate_rowcount=table.get(
+                            "validate_rowcount",
+                            False,
+                        ),
+                        analyze_after_load=table.get(
+                            "analyze_after_load",
+                            False,
+                        ),
+                    )
+                )
+
+            operations.append(
+                OperationConfig(
+                    type=operation["type"],
+                    source_timezone=operation.get("source_timezone"),
+                    target_timezone=operation.get(
+                        "target_timezone",
+                        "UTC",
+                    ),
+                    target_table_suffix=operation.get(
+                        "target_table_suffix",
+                        "_utc",
+                    ),
+                    tables=op_tables,
                 )
             )
 
         config = GlobalConfig(
             database=database,
-            source_timezone=raw["source_timezone"],
-            target_timezone=raw.get("target_timezone", "UTC"),
-            newtablenamesuffix=raw.get("newtablenamesuffix", "_utc"),
-            max_parallel_tables=raw.get("max_parallel_tables", 1),
-            max_db_connections=raw.get("max_db_connections", 20),
-            max_failed_chunks=raw.get("max_failed_chunks", 100),
-            statement_timeout_ms=raw.get("statement_timeout_ms", 7200000),
-            lock_timeout_ms=raw.get("lock_timeout_ms", 300000),
-            tables=tables,
+            max_parallel_tables=raw.get(
+                "max_parallel_tables",
+                1,
+            ),
+            max_db_connections=raw.get(
+                "max_db_connections",
+                20,
+            ),
+            max_failed_chunks=raw.get(
+                "max_failed_chunks",
+                100,
+            ),
+            statement_timeout_ms=raw.get(
+                "statement_timeout_ms",
+                7200000,
+            ),
+            lock_timeout_ms=raw.get(
+                "lock_timeout_ms",
+                300000,
+            ),
+            operations=operations,
         )
 
         GlobalConfigValidator.validate(config)

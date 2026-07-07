@@ -121,9 +121,16 @@ class LoggerFactory:
 
 class DryRunEngine:
 
-    def __init__(self, global_config, table_config, logger):
+    def __init__(
+        self,
+        global_config,
+        operation_config,
+        table_config,
+        logger,
+    ):
 
         self.global_config = global_config
+        self.operation_config = operation_config
         self.table_config = table_config
         self.logger = logger
 
@@ -165,7 +172,7 @@ class DryRunEngine:
                     table_name=self.table_config.table_name,
                     target_table=(
                         self.table_config.table_name
-                        + self.global_config.newtablenamesuffix
+                        + self.operation_config.target_table_suffix
                     ),
                     estimated_chunks=0,
                     timestamp_columns=[],
@@ -209,7 +216,7 @@ class DryRunEngine:
             return DryRunResult(
                 table_name=self.table_config.table_name,
                 target_table=self.table_config.table_name
-                + self.global_config.newtablenamesuffix,
+                + self.operation_config.target_table_suffix,
                 min_value=(
                     min_value.strftime("%Y-%m-%d %H:%M:%S") if min_value else None
                 ),
@@ -240,9 +247,16 @@ class DryRunEngine:
 
 class TableProcessor:
 
-    def __init__(self, global_config, table_config, logger):
+    def __init__(
+        self,
+        global_config,
+        operation_config,
+        table_config,
+        logger,
+    ):
 
         self.global_config = global_config
+        self.operation_config = operation_config
         self.table_config = table_config
         self.logger = logger
 
@@ -264,7 +278,7 @@ class TableProcessor:
         self.logger.info(
             f"TargetTable="
             f"{self.table_config.table_name}"
-            f"{self.global_config.newtablenamesuffix}"
+            f"{self.operation_config.target_table_suffix}"
         )
 
         self.logger.info(f"ChunkSize=" f"{self.table_config.chunk_size}")
@@ -292,7 +306,7 @@ class TableProcessor:
             )
 
             target_table = (
-                self.table_config.table_name + self.global_config.newtablenamesuffix
+                self.table_config.table_name + self.operation_config.target_table_suffix
             )
 
             repo.create_target_table_if_needed(
@@ -321,6 +335,7 @@ class TableProcessor:
 
                 SummaryManager(
                     self.global_config,
+                    self.operation_config,
                     self.table_config,
                     self.logger,
                     [],
@@ -367,7 +382,7 @@ class TableProcessor:
         )
 
         sql_generator = SQLGenerator(
-            self.global_config, self.table_config, table_context
+            self.global_config, self.operation_config, self.table_config, table_context
         )
 
         chunk_processor = ChunkProcessor(
@@ -441,6 +456,7 @@ class TableProcessor:
 
         SummaryManager(
             self.global_config,
+            self.operation_config,
             self.table_config,
             self.logger,
             timestamp_columns,
@@ -467,25 +483,38 @@ class MigrationController:
 
     def execute(self, dryrun=False):
 
-        for table_cfg in self.global_config.tables:
+        for operation_cfg in self.global_config.operations:
 
-            logfile = str(
-                get_execution_log_file(
-                    table_cfg.schema,
-                    table_cfg.table_name,
+            for table_cfg in operation_cfg.tables:
+
+                logfile = str(
+                    get_execution_log_file(
+                        table_cfg.schema,
+                        table_cfg.table_name,
+                    )
                 )
-            )
 
-            logger = LoggerFactory.build_logger(
-                f"{table_cfg.schema}." f"{table_cfg.table_name}", logfile
-            )
+                logger = LoggerFactory.build_logger(
+                    f"{table_cfg.schema}." f"{table_cfg.table_name}",
+                    logfile,
+                )
 
-            if dryrun:
+                if dryrun:
 
-                result = DryRunEngine(self.global_config, table_cfg, logger).execute()
+                    result = DryRunEngine(
+                        self.global_config,
+                        operation_cfg,
+                        table_cfg,
+                        logger,
+                    ).execute()
 
-                logger.info(f"DryRunResult={result}")
+                    logger.info(f"DryRunResult={result}")
 
-            else:
+                else:
 
-                TableProcessor(self.global_config, table_cfg, logger).execute()
+                    TableProcessor(
+                        self.global_config,
+                        operation_cfg,
+                        table_cfg,
+                        logger,
+                    ).execute()

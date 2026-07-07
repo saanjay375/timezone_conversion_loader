@@ -1,64 +1,20 @@
-import json
+from config import GlobalConfig
+from config import OperationConfig
+from config import ConfigLoader
 
-from datetime import datetime
+from config import OperationConfig
 
-from summary import (
-    SummaryFile,
-    SummaryManager,
-    OperationInfo,
+op = OperationConfig(
+    type="timezone_update",
+    source_timezone="America/New_York",
+    target_timezone="UTC",
+    target_table_suffix="_utc",
 )
 
-mgr = SummaryManager(
-    None,
-    None,
-    None,
-    [
-        "pxcommitdatetime",
-        "pxsavedatetime",
-        "pxcreatedatetime",
-        "pxupdatedatetime",
-    ],
-)
+print(op)
 
-summary = SummaryFile(
-    schema="repack",
-    source_table="pr_index_test",
-    target_table="pr_index_test_utc",
-    status="COMPLETED",
-    chunk_size="1M",
-    parallel_threads=4,
-    startvalue=None,
-    total_chunks=61,
-    completed_chunks=61,
-    failed_chunks=0,
-    null_chunk_processed=True,
-    total_rows_loaded=1074009,
-    rowcount_validation={
-        "enabled": True,
-        "source_count": 1074009,
-        "target_count": 1074009,
-        "status": "MATCH",
-    },
-    analyze_status={
-        "enabled": True,
-        "status": "COMPLETED",
-    },
-    start_time=datetime.now(),
-    end_time=datetime.now(),
-    duration_seconds=20,
-    operation=OperationInfo(
-        type="timezone_update",
-        source_timezone="America/New_York",
-        target_timezone="UTC",
-        updated_columns=mgr.timestamp_columns,
-        updated_column_count=len(mgr.timestamp_columns),
-        driving_column="pxcommitdatetime",
-    ),
-)
+from config import ConfigLoader
 
-print(
-    json.dumps(
-        mgr.to_dict(summary),
-        indent=4,
-    )
-)
+cfg = ConfigLoader.load("config/timezone_conversion_config_v2.json")
+
+print(cfg)

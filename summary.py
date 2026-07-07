@@ -110,12 +110,14 @@ class SummaryManager:
     def __init__(
         self,
         global_config,
+        operation_config,
         table_config,
         logger,
         timestamp_columns=None,
     ):
 
         self.global_config = global_config
+        self.operation_config = operation_config
 
         self.table_config = table_config
 
@@ -170,13 +172,13 @@ class SummaryManager:
         duration_seconds = int((end_time - start_time).total_seconds())
 
         target_table = (
-            self.table_config.table_name + self.global_config.newtablenamesuffix
+            self.table_config.table_name + self.operation_config.target_table_suffix
         )
 
         operation = OperationInfo(
-            type="timezone_update",
-            source_timezone=self.global_config.source_timezone,
-            target_timezone=self.global_config.target_timezone,
+            type=self.operation_config.type,
+            source_timezone=self.operation_config.source_timezone,
+            target_timezone=self.operation_config.target_timezone,
             updated_columns=self.timestamp_columns,
             updated_column_count=len(self.timestamp_columns),
             driving_column=self.table_config.driving_column,
