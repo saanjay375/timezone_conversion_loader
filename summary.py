@@ -71,8 +71,6 @@ class SummaryFile:
 
     status: str
 
-    driving_column: str
-
     chunk_size: str
 
     parallel_threads: int
@@ -189,7 +187,6 @@ class SummaryManager:
             source_table=self.table_config.table_name,
             target_table=target_table,
             status=self.determine_status(statistics, execution_failed).value,
-            driving_column=self.table_config.driving_column,
             chunk_size=self.table_config.chunk_size,
             parallel_threads=self.table_config.parallel_threads,
             startvalue=self.table_config.startvalue,
@@ -244,7 +241,6 @@ class SummaryManager:
             ###################################################################
             # CONFIGURATION
             ###################################################################
-            "driving_column": summary.driving_column,
             "chunk_size": summary.chunk_size,
             "parallel_threads": summary.parallel_threads,
             "startvalue": summary.startvalue,
