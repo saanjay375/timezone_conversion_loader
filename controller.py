@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -33,6 +34,9 @@ from sql_generator import SQLGenerator
 
 from paths import get_checkpoint_file
 from paths import get_execution_log_file
+from config import (
+    get_effective_postgresql_session_settings,
+)
 
 from processor import (
     StatisticsCollector,
@@ -40,7 +44,7 @@ from processor import (
     ChunkProcessor,
     build_table_context,
 )
-
+import 
 from worker_pool import WorkerPoolManager
 
 from summary import SummaryManager
@@ -136,7 +140,10 @@ class DryRunEngine:
 
     def execute(self):
 
-        with get_connection(self.global_config) as conn:
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
 
             repo = MetadataRepository(conn)
 
@@ -285,9 +292,27 @@ class TableProcessor:
 
         self.logger.info(f"ParallelThreads=" f"{self.table_config.parallel_threads}")
 
+        effective_settings = get_effective_postgresql_session_settings(
+            self.global_config,
+            self.operation_config,
+        )
+
+        if effective_settings:
+
+            self.logger.info(
+                "PostgreSQLSessionSettings=%s",
+                json.dumps(
+                    effective_settings,
+                    sort_keys=True,
+                ),
+            )
+
         self.logger.info("=" * 80)
 
-        with get_connection(self.global_config) as conn:
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
 
             repo = MetadataRepository(conn)
 
@@ -387,6 +412,7 @@ class TableProcessor:
 
         chunk_processor = ChunkProcessor(
             self.global_config,
+            self.operation_config,
             self.table_config,
             self.logger,
             sql_generator,
@@ -419,7 +445,10 @@ class TableProcessor:
 
         if self.table_config.validate_rowcount:
 
-            with get_connection(self.global_config) as conn:
+            with get_connection(
+                self.global_config,
+                self.operation_config,
+            ) as conn:
 
                 repo = MetadataRepository(conn)
 
@@ -442,7 +471,10 @@ class TableProcessor:
 
         if self.table_config.analyze_after_load:
 
-            with get_connection(self.global_config) as conn:
+            with get_connection(
+                self.global_config,
+                self.operation_config,
+            ) as conn:
 
                 repo = MetadataRepository(conn)
 

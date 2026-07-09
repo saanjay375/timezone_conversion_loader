@@ -25,6 +25,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from paths import get_summary_file
 
+from config import (
+    get_effective_postgresql_session_settings,
+)
+
 ###############################################################################
 # STATUS ENUM
 ###############################################################################
@@ -236,6 +240,12 @@ class SummaryManager:
             # OPERATION
             ###################################################################
             "operation": self.operation_to_dict(summary.operation),
+            "postgresql_session_settings": (
+                get_effective_postgresql_session_settings(
+                    self.global_config,
+                    self.operation_config,
+                )
+            ),
             ###################################################################
             # STATUS
             ###################################################################

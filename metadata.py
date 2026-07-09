@@ -23,12 +23,18 @@ Author: Timezone Conversion Loader
 from __future__ import annotations
 
 from contextlib import contextmanager
+import re
 
 import psycopg2
 
 from psycopg2 import sql
 
-from config import GlobalConfig
+
+from config import (
+    GlobalConfig,
+    OperationConfig,
+    get_effective_postgresql_session_settings,
+)
 
 ###############################################################################
 # EXCEPTIONS
@@ -39,6 +45,46 @@ class MetadataError(Exception):
     """Metadata related exception."""
 
     pass
+
+
+###############################################################################
+# POSTGRESQL SESSION SETTINGS
+###############################################################################
+
+
+POSTGRESQL_SETTING_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def validate_postgresql_session_setting_name(
+    setting_name: str,
+):
+
+    if not POSTGRESQL_SETTING_NAME_PATTERN.match(setting_name):
+
+        raise ValueError(f"Invalid PostgreSQL session setting name: " f"{setting_name}")
+
+
+def apply_postgresql_session_settings(
+    conn,
+    settings: dict[str, object],
+):
+
+    if not settings:
+
+        return
+
+    with conn.cursor() as cur:
+
+        for setting_name, setting_value in settings.items():
+
+            validate_postgresql_session_setting_name(setting_name)
+
+            cur.execute(
+                f"SET {setting_name} = %s",
+                (str(setting_value),),
+            )
+
+    conn.commit()
 
 
 ###############################################################################
@@ -94,11 +140,28 @@ class DatabaseConnectionFactory:
 
 
 @contextmanager
-def get_connection(global_config: GlobalConfig):
+def get_connection(
+    global_config: GlobalConfig,
+    operation_config: OperationConfig | None = None,
+):
 
     factory = DatabaseConnectionFactory(global_config)
 
     conn = factory.create_connection()
+
+    effective_settings = (
+        get_effective_postgresql_session_settings(
+            global_config,
+            operation_config,
+        )
+        if operation_config
+        else dict(global_config.postgresql_session_settings)
+    )
+
+    apply_postgresql_session_settings(
+        conn,
+        effective_settings,
+    )
 
     try:
 

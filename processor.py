@@ -173,22 +173,21 @@ class ChunkProcessor:
     def __init__(
         self,
         global_config,
+        operation_config,
         table_config,
         logger,
         sql_generator,
-        checkpoint_manager,
+        checkpoint,
         statistics,
     ):
 
         self.global_config = global_config
-
+        self.operation_config = operation_config
         self.table_config = table_config
-
         self.logger = logger
-
         self.sql_generator = sql_generator
 
-        self.checkpoint_manager = checkpoint_manager
+        self.checkpoint_manager = checkpoint
 
         self.statistics = statistics
 
@@ -202,7 +201,10 @@ class ChunkProcessor:
 
         try:
 
-            with get_connection(self.global_config) as conn:
+            with get_connection(
+                self.global_config,
+                self.operation_config,
+            ) as conn:
 
                 metadata = MetadataRepository(conn)
 

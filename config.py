@@ -28,6 +28,23 @@ class ConfigValidationError(Exception):
 
 
 ###############################################################################
+# POSTGRESQL SESSION SETTINGS
+###############################################################################
+
+
+def get_effective_postgresql_session_settings(
+    global_config: GlobalConfig,
+    operation_config: OperationConfig,
+) -> dict[str, object]:
+
+    effective_settings = dict(global_config.postgresql_session_settings)
+
+    effective_settings.update(operation_config.postgresql_session_settings)
+
+    return effective_settings
+
+
+###############################################################################
 # DATABASE CONFIG
 ###############################################################################
 
@@ -66,6 +83,8 @@ class OperationConfig:
     target_timezone: str | None = None
 
     target_table_suffix: str | None = None
+
+    postgresql_session_settings: dict[str, object] = field(default_factory=dict)
 
     tables: list["TableConfig"] = field(default_factory=list)
 
@@ -109,6 +128,8 @@ class GlobalConfig:
     statement_timeout_ms: int = 7200000
 
     lock_timeout_ms: int = 300000
+
+    postgresql_session_settings: dict[str, object] = field(default_factory=dict)
 
     operations: list[OperationConfig] = field(default_factory=list)
 
@@ -344,23 +365,31 @@ class ConfigLoader:
                         "target_table_suffix",
                         "_utc",
                     ),
+                    postgresql_session_settings=operation.get(
+                        "postgresql_session_settings",
+                        {},
+                    ),
                     tables=op_tables,
                 )
             )
 
         config = GlobalConfig(
             database=database,
+            postgresql_session_settings=raw.get(
+                "postgresql_session_settings",
+                {},
+            ),
             max_parallel_tables=raw.get(
                 "max_parallel_tables",
                 1,
             ),
             max_db_connections=raw.get(
                 "max_db_connections",
-                20,
+                50,
             ),
             max_failed_chunks=raw.get(
                 "max_failed_chunks",
-                100,
+                1,
             ),
             statement_timeout_ms=raw.get(
                 "statement_timeout_ms",
