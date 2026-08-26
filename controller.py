@@ -44,7 +44,7 @@ from processor import (
     ChunkProcessor,
     build_table_context,
 )
-import 
+
 from worker_pool import WorkerPoolManager
 
 from summary import SummaryManager

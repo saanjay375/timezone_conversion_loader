@@ -1,88 +1,134 @@
-from config import (
-    DatabaseConfig,
-    GlobalConfig,
-    OperationConfig,
-    TableConfig,
-)
+import json
+import os
+import tempfile
+import sys
+import types
 
-from processor import (
-    CheckpointManager,
-    ChunkProcessor,
-    StatisticsCollector,
-)
+from datetime import datetime
 
+from chunking import Chunk
 
-class DummyLogger:
+# processor.py imports metadata.py for runtime database processing.
+# This isolated unit test exercises CheckpointManager only, so provide
+# a minimal metadata stub rather than opening a database connection.
+metadata_stub = types.ModuleType("metadata")
+metadata_stub.MetadataRepository = object
+metadata_stub.get_connection = None
+sys.modules.setdefault("metadata", metadata_stub)
 
-    def info(self, message):
-        print(f"INFO: {message}")
-
-    def error(self, message):
-        print(f"ERROR: {message}")
+from processor import CheckpointManager
 
 
-class DummySQLGenerator:
+def make_range_chunk(chunk_number, start_value, end_value):
 
-    pass
+    return Chunk(
+        chunk_number=chunk_number,
+        predicate=(
+            f"\"pxcommitdatetime\" >= '{start_value}' "
+            f"AND \"pxcommitdatetime\" < '{end_value}'"
+        ),
+        start_value=datetime.fromisoformat(start_value),
+        end_value=datetime.fromisoformat(end_value),
+        total_chunks=6,
+        is_null_chunk=False,
+    )
 
 
-db_config = DatabaseConfig(
-    host="localhost",
-    port=5432,
-    dbname="postgres",
-    username="postgres",
-    password="postgres",
-)
+def make_null_chunk():
 
-global_config = GlobalConfig(
-    database=db_config,
-)
+    return Chunk(
+        chunk_number=6,
+        predicate='"pxcommitdatetime" IS NULL',
+        start_value=None,
+        end_value=None,
+        total_chunks=6,
+        is_null_chunk=True,
+    )
 
-operation_config = OperationConfig(
-    type="timezone_update",
-    source_timezone="America/New_York",
-    target_timezone="UTC",
-    target_table_suffix="_utc",
-)
 
-table_config = TableConfig(
-    schema="repack",
-    table_name="pr_index_test",
-    driving_column="pxcommitdatetime",
-    chunk_size="1M",
-    parallel_threads=4,
-)
+def print_checkpoint(title, checkpoint_manager):
 
-checkpoint_manager = CheckpointManager("test_checkpoint.json")
+    print()
+    print("=" * 80)
+    print(title)
+    print("=" * 80)
+    print(json.dumps(checkpoint_manager.load(), indent=4))
 
-statistics = StatisticsCollector()
 
-processor = ChunkProcessor(
-    global_config,
-    operation_config,
-    table_config,
-    DummyLogger(),
-    DummySQLGenerator(),
-    checkpoint_manager,
-    statistics,
-)
+with tempfile.TemporaryDirectory() as temp_directory:
 
-print()
-print("=" * 80)
-print("CHUNK PROCESSOR ATTRIBUTE TEST")
-print("=" * 80)
+    checkpoint_file = os.path.join(
+        temp_directory,
+        "resume_watermark_checkpoint.json",
+    )
 
-print("Has checkpoint_manager:")
-print(hasattr(processor, "checkpoint_manager"))
+    checkpoint_manager = CheckpointManager(checkpoint_file)
 
-print()
-print("checkpoint_manager object:")
-print(processor.checkpoint_manager)
+    chunks = {
+        1: make_range_chunk(
+            1,
+            "2025-01-01 00:00:00",
+            "2025-02-01 00:00:00",
+        ),
+        2: make_range_chunk(
+            2,
+            "2025-02-01 00:00:00",
+            "2025-03-01 00:00:00",
+        ),
+        3: make_range_chunk(
+            3,
+            "2025-03-01 00:00:00",
+            "2025-04-01 00:00:00",
+        ),
+        4: make_range_chunk(
+            4,
+            "2025-04-01 00:00:00",
+            "2025-05-01 00:00:00",
+        ),
+        5: make_range_chunk(
+            5,
+            "2025-05-01 00:00:00",
+            "2025-06-01 00:00:00",
+        ),
+    }
 
-print()
-print("Has operation_config:")
-print(hasattr(processor, "operation_config"))
+    checkpoint_manager.update(chunks[1], 1_000_000)
+    checkpoint_manager.update(chunks[2], 1_000_000)
+    checkpoint_manager.update(chunks[3], 1_000_000)
+    checkpoint_manager.update(chunks[5], 1_500_000)
+    checkpoint_manager.update(make_null_chunk(), 500_000)
 
-print()
-print("operation_config:")
-print(processor.operation_config)
+    checkpoint_before_gap_closes = checkpoint_manager.load()
+
+    assert checkpoint_before_gap_closes["completed_chunks"] == [1, 2, 3, 5]
+    assert checkpoint_before_gap_closes["resume_watermark_chunk"] == 3
+    assert (
+        checkpoint_before_gap_closes["resume_watermark_end_value"]
+        == "2025-04-01 00:00:00.000000"
+    )
+    assert checkpoint_before_gap_closes["null_chunk_completed"] is True
+
+    print_checkpoint(
+        "CHECKPOINT BEFORE CHUNK 4 COMPLETES",
+        checkpoint_manager,
+    )
+
+    checkpoint_manager.update(chunks[4], 45_000_000)
+
+    checkpoint_after_gap_closes = checkpoint_manager.load()
+
+    assert checkpoint_after_gap_closes["completed_chunks"] == [1, 2, 3, 4, 5]
+    assert checkpoint_after_gap_closes["resume_watermark_chunk"] == 5
+    assert (
+        checkpoint_after_gap_closes["resume_watermark_end_value"]
+        == "2025-06-01 00:00:00.000000"
+    )
+    assert checkpoint_after_gap_closes["total_rows_inserted"] == 50_000_000
+
+    print_checkpoint(
+        "CHECKPOINT AFTER CHUNK 4 COMPLETES",
+        checkpoint_manager,
+    )
+
+    print()
+    print("RESUME WATERMARK TEST PASSED")

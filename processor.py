@@ -118,6 +118,8 @@ class StatisticsCollector:
 
 class CheckpointManager:
 
+    CHECKPOINT_VERSION = 2
+
     def __init__(self, checkpoint_file: str):
 
         self.checkpoint_file = checkpoint_file
@@ -125,29 +127,147 @@ class CheckpointManager:
         self._lock = threading.Lock()
 
     ###########################################################################
+    # STATE HELPERS
+    ###########################################################################
+
+    @staticmethod
+    def _format_datetime(value):
+
+        if value is None:
+            return None
+
+        return value.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    def _new_state(self):
+
+        return {
+            "version": self.CHECKPOINT_VERSION,
+            "resume_watermark_chunk": 0,
+            "resume_watermark_end_value": None,
+            "resume_watermark_predicate": None,
+            "completed_chunks": [],
+            "completed_chunk_details": {},
+            "null_chunk_completed": False,
+            "null_chunk_rows_inserted": 0,
+            "total_rows_inserted": 0,
+            "last_update_time": None,
+        }
+
+    def _load_unlocked(self):
+
+        if not os.path.exists(self.checkpoint_file):
+            return self._new_state()
+
+        with open(self.checkpoint_file, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        if payload.get("version") != self.CHECKPOINT_VERSION:
+            return self._new_state()
+
+        return payload
+
+    @staticmethod
+    def _calculate_resume_watermark(completed_chunks):
+
+        completed_set = {int(chunk_number) for chunk_number in completed_chunks}
+
+        watermark_chunk = 0
+
+        while watermark_chunk + 1 in completed_set:
+            watermark_chunk += 1
+
+        return watermark_chunk
+
+    def _write_unlocked(self, payload):
+
+        tmp_file = self.checkpoint_file + ".tmp"
+
+        checkpoint_directory = os.path.dirname(self.checkpoint_file)
+
+        if checkpoint_directory:
+            os.makedirs(checkpoint_directory, exist_ok=True)
+
+        with open(tmp_file, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=4)
+
+        os.replace(tmp_file, self.checkpoint_file)
+
+    ###########################################################################
     # UPDATE
     ###########################################################################
 
     def update(self, chunk, rows_inserted):
 
-        payload = {
-            "last_completed_chunk": chunk.chunk_number,
-            "last_successful_predicate": chunk.predicate,
-            "rows_inserted": rows_inserted,
-            "last_update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-        tmp_file = self.checkpoint_file + ".tmp"
-
-        os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
-
         with self._lock:
 
-            with open(tmp_file, "w", encoding="utf-8") as handle:
+            payload = self._load_unlocked()
 
-                json.dump(payload, handle, indent=4)
+            if chunk.is_null_chunk:
 
-            os.replace(tmp_file, self.checkpoint_file)
+                payload["null_chunk_completed"] = True
+                payload["null_chunk_rows_inserted"] = rows_inserted
+
+            else:
+
+                chunk_number = int(chunk.chunk_number)
+                chunk_key = str(chunk_number)
+
+                completed_chunks = {
+                    int(value) for value in payload.get("completed_chunks", [])
+                }
+                completed_chunks.add(chunk_number)
+
+                payload["completed_chunks"] = sorted(completed_chunks)
+
+                completed_chunk_details = payload.setdefault(
+                    "completed_chunk_details",
+                    {},
+                )
+
+                completed_chunk_details[chunk_key] = {
+                    "start_value": self._format_datetime(chunk.start_value),
+                    "end_value": self._format_datetime(chunk.end_value),
+                    "predicate": chunk.predicate,
+                    "rows_inserted": rows_inserted,
+                }
+
+                watermark_chunk = self._calculate_resume_watermark(
+                    payload["completed_chunks"]
+                )
+
+                payload["resume_watermark_chunk"] = watermark_chunk
+
+                if watermark_chunk > 0:
+
+                    watermark_details = completed_chunk_details[str(watermark_chunk)]
+
+                    payload["resume_watermark_end_value"] = watermark_details[
+                        "end_value"
+                    ]
+                    payload["resume_watermark_predicate"] = watermark_details[
+                        "predicate"
+                    ]
+
+                else:
+
+                    payload["resume_watermark_end_value"] = None
+                    payload["resume_watermark_predicate"] = None
+
+            range_rows_inserted = sum(
+                int(details.get("rows_inserted", 0))
+                for details in payload.get("completed_chunk_details", {}).values()
+            )
+
+            payload["total_rows_inserted"] = (
+                range_rows_inserted
+                + int(payload.get("null_chunk_rows_inserted", 0))
+            )
+
+            payload["last_update_time"] = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+
+            self._write_unlocked(payload)
 
     ###########################################################################
     # LOAD
@@ -155,12 +275,12 @@ class CheckpointManager:
 
     def load(self):
 
-        if not os.path.exists(self.checkpoint_file):
-            return None
+        with self._lock:
 
-        with open(self.checkpoint_file, "r", encoding="utf-8") as handle:
+            if not os.path.exists(self.checkpoint_file):
+                return None
 
-            return json.load(handle)
+            return self._load_unlocked()
 
 
 ###############################################################################
