@@ -121,25 +121,16 @@ class CheckpointManager:
     CHECKPOINT_VERSION = 2
 
     def __init__(self, checkpoint_file: str):
-
         self.checkpoint_file = checkpoint_file
-
         self._lock = threading.Lock()
-
-    ###########################################################################
-    # STATE HELPERS
-    ###########################################################################
 
     @staticmethod
     def _format_datetime(value):
-
         if value is None:
             return None
-
         return value.strftime("%Y-%m-%d %H:%M:%S.%f")
 
     def _new_state(self):
-
         return {
             "version": self.CHECKPOINT_VERSION,
             "resume_watermark_chunk": 0,
@@ -154,133 +145,105 @@ class CheckpointManager:
         }
 
     def _load_unlocked(self):
-
         if not os.path.exists(self.checkpoint_file):
             return self._new_state()
-
         with open(self.checkpoint_file, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
-
         if payload.get("version") != self.CHECKPOINT_VERSION:
             return self._new_state()
-
         return payload
 
     @staticmethod
     def _calculate_resume_watermark(completed_chunks):
-
-        completed_set = {int(chunk_number) for chunk_number in completed_chunks}
-
+        completed_set = {int(value) for value in completed_chunks}
         watermark_chunk = 0
-
         while watermark_chunk + 1 in completed_set:
             watermark_chunk += 1
-
         return watermark_chunk
 
     def _write_unlocked(self, payload):
-
         tmp_file = self.checkpoint_file + ".tmp"
-
         checkpoint_directory = os.path.dirname(self.checkpoint_file)
-
         if checkpoint_directory:
             os.makedirs(checkpoint_directory, exist_ok=True)
-
         with open(tmp_file, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=4)
-
         os.replace(tmp_file, self.checkpoint_file)
 
-    ###########################################################################
-    # UPDATE
-    ###########################################################################
-
     def update(self, chunk, rows_inserted):
-
         with self._lock:
-
             payload = self._load_unlocked()
-
             if chunk.is_null_chunk:
-
                 payload["null_chunk_completed"] = True
-                payload["null_chunk_rows_inserted"] = rows_inserted
-
+                payload["null_chunk_rows_inserted"] = (
+                    int(payload.get("null_chunk_rows_inserted", 0))
+                    + int(rows_inserted)
+                )
             else:
-
                 chunk_number = int(chunk.chunk_number)
-                chunk_key = str(chunk_number)
-
                 completed_chunks = {
                     int(value) for value in payload.get("completed_chunks", [])
                 }
                 completed_chunks.add(chunk_number)
-
                 payload["completed_chunks"] = sorted(completed_chunks)
-
-                completed_chunk_details = payload.setdefault(
-                    "completed_chunk_details",
-                    {},
+                details = payload.setdefault("completed_chunk_details", {})
+                existing = details.get(str(chunk_number), {})
+                cumulative_rows = (
+                    int(existing.get("rows_inserted", 0)) + int(rows_inserted)
                 )
-
-                completed_chunk_details[chunk_key] = {
+                details[str(chunk_number)] = {
                     "start_value": self._format_datetime(chunk.start_value),
                     "end_value": self._format_datetime(chunk.end_value),
                     "predicate": chunk.predicate,
-                    "rows_inserted": rows_inserted,
+                    "rows_inserted": cumulative_rows,
                 }
-
-                watermark_chunk = self._calculate_resume_watermark(
+                watermark = self._calculate_resume_watermark(
                     payload["completed_chunks"]
                 )
-
-                payload["resume_watermark_chunk"] = watermark_chunk
-
-                if watermark_chunk > 0:
-
-                    watermark_details = completed_chunk_details[str(watermark_chunk)]
-
+                payload["resume_watermark_chunk"] = watermark
+                if watermark > 0:
+                    watermark_details = details[str(watermark)]
                     payload["resume_watermark_end_value"] = watermark_details[
                         "end_value"
                     ]
                     payload["resume_watermark_predicate"] = watermark_details[
                         "predicate"
                     ]
-
                 else:
-
                     payload["resume_watermark_end_value"] = None
                     payload["resume_watermark_predicate"] = None
-
-            range_rows_inserted = sum(
-                int(details.get("rows_inserted", 0))
-                for details in payload.get("completed_chunk_details", {}).values()
+            range_rows = sum(
+                int(item.get("rows_inserted", 0))
+                for item in payload.get("completed_chunk_details", {}).values()
             )
-
             payload["total_rows_inserted"] = (
-                range_rows_inserted
-                + int(payload.get("null_chunk_rows_inserted", 0))
+                range_rows + int(payload.get("null_chunk_rows_inserted", 0))
             )
-
             payload["last_update_time"] = datetime.now().strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-
             self._write_unlocked(payload)
 
-    ###########################################################################
-    # LOAD
-    ###########################################################################
-
     def load(self):
-
         with self._lock:
-
             if not os.path.exists(self.checkpoint_file):
                 return None
-
             return self._load_unlocked()
+
+    def get_pending_chunks(self, chunks):
+        checkpoint = self.load()
+        if not checkpoint:
+            return list(chunks)
+        watermark = int(checkpoint.get("resume_watermark_chunk", 0))
+        null_completed = bool(checkpoint.get("null_chunk_completed", False))
+        pending = []
+        for chunk in chunks:
+            if chunk.is_null_chunk:
+                if not null_completed:
+                    pending.append(chunk)
+            elif int(chunk.chunk_number) > watermark:
+                pending.append(chunk)
+        return pending
 
 
 ###############################################################################

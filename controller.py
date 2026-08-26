@@ -420,7 +420,22 @@ class TableProcessor:
             statistics,
         )
 
-        chunk_queue = build_chunk_queue(chunks)
+        pending_chunks = checkpoint.get_pending_chunks(chunks)
+
+        checkpoint_state = checkpoint.load()
+
+        if checkpoint_state:
+
+            self.logger.info(
+                f"ResumeWatermarkChunk="
+                f"{checkpoint_state.get('resume_watermark_chunk', 0)} "
+                f"ResumeWatermarkEndValue="
+                f"{checkpoint_state.get('resume_watermark_end_value')} "
+                f"PendingChunks="
+                f"{len(pending_chunks)}"
+            )
+
+        chunk_queue = build_chunk_queue(pending_chunks)
 
         worker_pool = WorkerPoolManager(
             self.table_config, chunk_queue, chunk_processor, self.logger
