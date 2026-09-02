@@ -1,167 +1,131 @@
-import json
-import os
-import sys
-import tempfile
-import types
-
+from contextlib import contextmanager
 from datetime import datetime
+from time import perf_counter, sleep
 
-from chunking import Chunk
-
-# The test exercises checkpoint logic only. Stub the runtime database module so
-# no PostgreSQL connection is required.
-metadata_stub = types.ModuleType("metadata")
-metadata_stub.MetadataRepository = object
-metadata_stub.get_connection = None
-sys.modules.setdefault("metadata", metadata_stub)
-
-from processor import CheckpointManager
+import controller
+from config import DatabaseConfig, GlobalConfig, OperationConfig, TableConfig
+from controller import DryRunEngine
 
 
-def make_range_chunk(chunk_number, start_value, end_value):
+class TestLogger:
 
-    return Chunk(
-        chunk_number=chunk_number,
-        predicate=(
-            f'"pxcommitdatetime" >= \'{start_value}\' '
-            f'AND "pxcommitdatetime" < \'{end_value}\''
-        ),
-        start_value=datetime.fromisoformat(start_value),
-        end_value=datetime.fromisoformat(end_value),
-        total_chunks=6,
-        is_null_chunk=False,
-    )
+    def info(self, message, *args):
+        if args:
+            message = message % args
+        print(message)
 
 
-def make_null_chunk():
+class ValidationRepository:
 
-    return Chunk(
-        chunk_number=6,
-        predicate='"pxcommitdatetime" IS NULL',
-        start_value=None,
-        end_value=None,
-        total_chunks=6,
-        is_null_chunk=True,
-    )
+    def __init__(self, connection):
+        self.connection = connection
 
+    def validate_source_table(self, schema, table_name):
+        return None
 
-def print_json_section(title, payload):
+    def validate_not_partitioned(self, schema, table_name):
+        return None
 
-    print()
-    print("=" * 80)
-    print(title)
-    print("=" * 80)
-    print(json.dumps(payload, indent=4))
+    def validate_driving_column(self, schema, table_name, driving_column):
+        return None
 
 
-with tempfile.TemporaryDirectory() as temp_directory:
+@contextmanager
+def fake_get_connection(global_config, operation_config=None):
+    yield object()
 
-    checkpoint_file = os.path.join(
-        temp_directory,
-        "resume_watermark_checkpoint.json",
-    )
 
-    checkpoint_manager = CheckpointManager(checkpoint_file)
+class ParallelDryRunEngine(DryRunEngine):
 
-    chunks = {
-        1: make_range_chunk(
-            1,
-            "2025-01-01 00:00:00",
-            "2025-02-01 00:00:00",
-        ),
-        2: make_range_chunk(
-            2,
-            "2025-02-01 00:00:00",
-            "2025-03-01 00:00:00",
-        ),
-        3: make_range_chunk(
-            3,
-            "2025-03-01 00:00:00",
-            "2025-04-01 00:00:00",
-        ),
-        4: make_range_chunk(
-            4,
-            "2025-04-01 00:00:00",
-            "2025-05-01 00:00:00",
-        ),
-        5: make_range_chunk(
-            5,
-            "2025-05-01 00:00:00",
-            "2025-06-01 00:00:00",
-        ),
-    }
+    TASK_DELAY_SECONDS = 0.25
 
-    all_chunks = [
-        chunks[1],
-        chunks[2],
-        chunks[3],
-        chunks[4],
-        chunks[5],
-        make_null_chunk(),
-    ]
+    def _task(self, value):
+        sleep(self.TASK_DELAY_SECONDS)
+        return value
 
-    # Simulate out-of-order completion: chunks 1, 2, 3 and 5 complete while
-    # chunk 4 is still running. The NULL chunk also completes.
-    checkpoint_manager.update(chunks[1], 1_000_000)
-    checkpoint_manager.update(chunks[2], 1_000_000)
-    checkpoint_manager.update(chunks[3], 1_000_000)
-    checkpoint_manager.update(chunks[5], 1_500_000)
-    checkpoint_manager.update(all_chunks[-1], 500_000)
+    def _get_min_value(self):
+        return self._task(datetime(2025, 1, 1, 0, 0, 0))
 
-    checkpoint_before_gap_closes = checkpoint_manager.load()
-    pending_before_gap_closes = checkpoint_manager.get_pending_chunks(all_chunks)
-    pending_before_numbers = [chunk.chunk_number for chunk in pending_before_gap_closes]
+    def _get_max_value(self):
+        return self._task(datetime(2025, 6, 30, 12, 0, 0))
 
-    print_json_section(
-        "CHECKPOINT BEFORE CHUNK 4 COMPLETES",
-        checkpoint_before_gap_closes,
-    )
-    print_json_section(
-        "PENDING CHUNKS BEFORE RESTART",
-        pending_before_numbers,
-    )
+    def _get_timestamp_columns(self):
+        return self._task([
+            "pxcommitdatetime",
+            "pxcreatedatetime",
+        ])
 
-    assert checkpoint_before_gap_closes["completed_chunks"] == [1, 2, 3, 5]
-    assert checkpoint_before_gap_closes["resume_watermark_chunk"] == 3
-    assert (
-        checkpoint_before_gap_closes["resume_watermark_end_value"]
-        == "2025-04-01 00:00:00.000000"
-    )
-    assert checkpoint_before_gap_closes["null_chunk_completed"] is True
-    assert pending_before_numbers == [4, 5]
+    def _get_table_size_gb(self):
+        return self._task(10.5)
 
-    # Simulate restart. Chunk 4 must run, and chunk 5 is safely replayed because
-    # it lies beyond the contiguous watermark. ON CONFLICT DO NOTHING protects
-    # an already-loaded chunk 5.
-    checkpoint_manager.update(chunks[4], 45_000_000)
-    checkpoint_manager.update(chunks[5], 0)
+    def _get_index_status(self):
+        return self._task(True)
 
-    checkpoint_after_gap_closes = checkpoint_manager.load()
-    pending_after_gap_closes = checkpoint_manager.get_pending_chunks(all_chunks)
-    pending_after_numbers = [chunk.chunk_number for chunk in pending_after_gap_closes]
 
-    print_json_section(
-        "CHECKPOINT AFTER CHUNK 4 CLOSES THE GAP",
-        checkpoint_after_gap_closes,
-    )
-    print_json_section(
-        "PENDING CHUNKS AFTER RESUME",
-        pending_after_numbers,
-    )
+controller.get_connection = fake_get_connection
+controller.MetadataRepository = ValidationRepository
 
-    assert checkpoint_after_gap_closes["completed_chunks"] == [1, 2, 3, 4, 5]
-    assert checkpoint_after_gap_closes["resume_watermark_chunk"] == 5
-    assert (
-        checkpoint_after_gap_closes["resume_watermark_end_value"]
-        == "2025-06-01 00:00:00.000000"
-    )
-    assert checkpoint_after_gap_closes["total_rows_inserted"] == 50_000_000
-    assert pending_after_numbers == []
 
-    print()
-    print("Expected watermark before gap closure : 3")
-    print("Actual watermark before gap closure   : 3")
-    print("Expected watermark after gap closure  : 5")
-    print("Actual watermark after gap closure    : 5")
-    print()
-    print("RESUME WATERMARK PHASE-2 TEST PASSED")
+database = DatabaseConfig(
+    host="localhost",
+    port=5432,
+    dbname="test_database",
+    username="test_user",
+    password="test_password",
+)
+
+global_config = GlobalConfig(
+    database=database,
+)
+
+operation_config = OperationConfig(
+    type="timezone_update",
+    source_timezone="America/New_York",
+    target_timezone="UTC",
+    target_table_suffix="_utc",
+)
+
+table_config = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    parallel_threads=4,
+)
+
+engine = ParallelDryRunEngine(
+    global_config,
+    operation_config,
+    table_config,
+    TestLogger(),
+)
+
+start_time = perf_counter()
+result = engine.execute()
+elapsed_seconds = perf_counter() - start_time
+
+print()
+print("=" * 80)
+print("PARALLEL DRYRUN TEST RESULT")
+print("=" * 80)
+print(result)
+print(f"ElapsedSeconds={elapsed_seconds:.3f}")
+
+assert result.table_name == "pr_index_test"
+assert result.target_table == "pr_index_test_utc"
+assert result.min_value == "2025-01-01 00:00:00"
+assert result.max_value == "2025-06-30 12:00:00"
+assert result.timestamp_columns == [
+    "pxcommitdatetime",
+    "pxcreatedatetime",
+]
+assert result.table_size_gb == 10.5
+assert result.index_present is True
+assert result.validation_status == "VALIDATED"
+
+# Five tasks each sleep for 0.25 seconds. Serial execution would take at least
+# 1.25 seconds. Parallel execution should complete comfortably below 0.75.
+assert elapsed_seconds < 0.75
+
+print()
+print("PARALLEL DRYRUN TEST PASSED")

@@ -1,0 +1,51 @@
+{
+  "_CONFIG_DESCRIPTION": "Timezone Conversion Loader Configuration",
+
+  "database": {
+    "host": "your-postgresql-host",
+    "port": 5432,
+    "dbname": "your_database",
+    "username": "your_username",
+    "password": "your_password"
+  },
+
+  "postgresql_session_settings": {
+    "max_parallel_workers_per_gather": 8,
+    "parallel_setup_cost": 0.1,
+    "parallel_tuple_cost": 0.01,
+    "work_mem": "512MB"
+  },
+
+  "max_parallel_tables": 1,
+  "max_db_connections": 50,
+  "max_failed_chunks": 1,
+  "statement_timeout_ms": 7200000,
+  "lock_timeout_ms": 300000,
+
+  "operations": [
+    {
+      "type": "timezone_update",
+
+      "postgresql_session_settings": {
+        "max_parallel_workers_per_gather": 16
+      },
+
+      "source_timezone": "America/New_York",
+      "target_timezone": "UTC",
+      "target_table_suffix": "_utc",
+
+      "tables": [
+        {
+          "schema": "repack",
+          "table_name": "pr_index_test",
+          "driving_column": "pxcommitdatetime",
+          "chunk_size": "1M",
+          "parallel_threads": 4,
+          "startvalue": null,
+          "validate_rowcount": true,
+          "analyze_after_load": true
+        }
+      ]
+    }
+  ]
+}

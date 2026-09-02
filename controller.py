@@ -48,6 +48,7 @@ from processor import (
 from worker_pool import WorkerPoolManager
 
 from summary import SummaryManager
+from concurrent.futures import ThreadPoolExecutor
 
 ###############################################################################
 # DRYRUN RESULT
@@ -140,6 +141,10 @@ class DryRunEngine:
 
     def execute(self):
 
+        #######################################################################
+        # PREREQUISITE VALIDATIONS
+        #######################################################################
+
         with get_connection(
             self.global_config,
             self.operation_config,
@@ -148,11 +153,13 @@ class DryRunEngine:
             repo = MetadataRepository(conn)
 
             repo.validate_source_table(
-                self.table_config.schema, self.table_config.table_name
+                self.table_config.schema,
+                self.table_config.table_name,
             )
 
             repo.validate_not_partitioned(
-                self.table_config.schema, self.table_config.table_name
+                self.table_config.schema,
+                self.table_config.table_name,
             )
 
             repo.validate_driving_column(
@@ -161,58 +168,168 @@ class DryRunEngine:
                 self.table_config.driving_column,
             )
 
-            min_value = repo.get_min_value(
+        #######################################################################
+        # PARALLEL METADATA DISCOVERY
+        #######################################################################
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+
+            min_future = executor.submit(
+                self._get_min_value
+            )
+
+            max_future = executor.submit(
+                self._get_max_value
+            )
+
+            timestamp_columns_future = executor.submit(
+                self._get_timestamp_columns
+            )
+
+            table_size_future = executor.submit(
+                self._get_table_size_gb
+            )
+
+            index_status_future = executor.submit(
+                self._get_index_status
+            )
+
+            min_value = min_future.result()
+            max_value = max_future.result()
+            timestamp_columns = timestamp_columns_future.result()
+            table_size_gb = table_size_future.result()
+            index_exists = index_status_future.result()
+
+        #######################################################################
+        # EMPTY TABLE
+        #######################################################################
+
+        if min_value is None:
+
+            return DryRunResult(
+                table_name=self.table_config.table_name,
+                target_table=(
+                    self.table_config.table_name
+                    + self.operation_config.target_table_suffix
+                ),
+                min_value=None,
+                max_value=None,
+                start_value=None,
+                chunk_size=self.table_config.chunk_size,
+                parallel_threads=self.table_config.parallel_threads,
+                estimated_chunks=0,
+                timestamp_columns=timestamp_columns,
+                table_size_gb=table_size_gb,
+                index_present=index_exists,
+                validation_status="EMPTY_TABLE",
+            )
+
+        start_value = (
+            convert_startvalue(self.table_config.startvalue)
+            if self.table_config.startvalue
+            else min_value
+        )
+
+        chunks = generate_chunks(
+            start_value,
+            max_value,
+            self.table_config.chunk_size,
+            self.table_config.driving_column,
+        )
+
+        self.logger.info(f"MinValue={min_value}")
+        self.logger.info(f"MaxValue={max_value}")
+        self.logger.info(f"StartValue={start_value}")
+        self.logger.info(f"ChunkSize={self.table_config.chunk_size}")
+        self.logger.info(
+            f"ParallelThreads={self.table_config.parallel_threads}"
+        )
+        self.logger.info(f"EstimatedChunks={len(chunks)}")
+
+        return DryRunResult(
+            table_name=self.table_config.table_name,
+            target_table=(
+                self.table_config.table_name
+                + self.operation_config.target_table_suffix
+            ),
+            min_value=min_value.strftime("%Y-%m-%d %H:%M:%S"),
+            max_value=max_value.strftime("%Y-%m-%d %H:%M:%S"),
+            start_value=start_value.strftime("%Y-%m-%d %H:%M:%S"),
+            chunk_size=self.table_config.chunk_size,
+            parallel_threads=self.table_config.parallel_threads,
+            estimated_chunks=len(chunks),
+            timestamp_columns=timestamp_columns,
+            table_size_gb=table_size_gb,
+            index_present=index_exists,
+            validation_status="VALIDATED",
+        )
+
+    def _get_min_value(self):
+
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
+
+            repo = MetadataRepository(conn)
+
+            return repo.get_min_value(
                 self.table_config.schema,
                 self.table_config.table_name,
                 self.table_config.driving_column,
             )
 
-            max_value = repo.get_max_value(
+    def _get_max_value(self):
+
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
+
+            repo = MetadataRepository(conn)
+
+            return repo.get_max_value(
                 self.table_config.schema,
                 self.table_config.table_name,
                 self.table_config.driving_column,
             )
 
-            if min_value is None:
+    def _get_timestamp_columns(self):
 
-                return DryRunResult(
-                    table_name=self.table_config.table_name,
-                    target_table=(
-                        self.table_config.table_name
-                        + self.operation_config.target_table_suffix
-                    ),
-                    estimated_chunks=0,
-                    timestamp_columns=[],
-                    table_size_gb=0,
-                    index_present=False,
-                    validation_status="EMPTY_TABLE",
-                )
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
 
-            start_value = (
-                convert_startvalue(self.table_config.startvalue)
-                if self.table_config.startvalue
-                else min_value
+            repo = MetadataRepository(conn)
+
+            return repo.get_timestamp_columns(
+                self.table_config.schema,
+                self.table_config.table_name,
             )
 
-            chunks = generate_chunks(
-                start_value,
-                max_value,
-                self.table_config.chunk_size,
-                self.table_config.driving_column,
-            )
-            self.logger.info(f"MinValue={min_value}")
+    def _get_table_size_gb(self):
 
-            self.logger.info(f"MaxValue={max_value}")
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
 
-            self.logger.info(f"StartValue={start_value}")
+            repo = MetadataRepository(conn)
 
-            self.logger.info(f"ChunkSize={self.table_config.chunk_size}")
-
-            self.logger.info(
-                f"ParallelThreads=" f"{self.table_config.parallel_threads}"
+            return repo.get_table_size_gb(
+                self.table_config.schema,
+                self.table_config.table_name,
             )
 
-            self.logger.info(f"EstimatedChunks={len(chunks)}")
+    def _get_index_status(self):
+
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
+
+            repo = MetadataRepository(conn)
 
             index_exists, _ = repo.driving_column_index_exists(
                 self.table_config.schema,
@@ -220,31 +337,7 @@ class DryRunEngine:
                 self.table_config.driving_column,
             )
 
-            return DryRunResult(
-                table_name=self.table_config.table_name,
-                target_table=self.table_config.table_name
-                + self.operation_config.target_table_suffix,
-                min_value=(
-                    min_value.strftime("%Y-%m-%d %H:%M:%S") if min_value else None
-                ),
-                max_value=(
-                    max_value.strftime("%Y-%m-%d %H:%M:%S") if max_value else None
-                ),
-                start_value=(
-                    start_value.strftime("%Y-%m-%d %H:%M:%S") if start_value else None
-                ),
-                chunk_size=self.table_config.chunk_size,
-                parallel_threads=self.table_config.parallel_threads,
-                estimated_chunks=len(chunks),
-                timestamp_columns=repo.get_timestamp_columns(
-                    self.table_config.schema, self.table_config.table_name
-                ),
-                table_size_gb=repo.get_table_size_gb(
-                    self.table_config.schema, self.table_config.table_name
-                ),
-                index_present=index_exists,
-                validation_status="VALIDATED",
-            )
+            return index_exists
 
 
 ###############################################################################
