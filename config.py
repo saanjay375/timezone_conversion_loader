@@ -90,6 +90,7 @@ class OperationConfig:
 
 
 @dataclass
+@dataclass
 class TableConfig:
 
     schema: str
@@ -107,6 +108,10 @@ class TableConfig:
     validate_rowcount: bool = False
 
     analyze_after_load: bool = False
+
+    timestamp_update_validation: bool = False
+
+    rowcount_lob_validation: bool = False
 
 
 ###############################################################################
@@ -348,6 +353,14 @@ class ConfigLoader:
                         ),
                         analyze_after_load=table.get(
                             "analyze_after_load",
+                            False,
+                        ),
+                        timestamp_update_validation=table.get(
+                            "timestamp_update_validation",
+                            False,
+                        ),
+                        rowcount_lob_validation=table.get(
+                            "rowcount_lob_validation",
                             False,
                         ),
                     )

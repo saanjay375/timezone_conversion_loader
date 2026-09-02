@@ -174,35 +174,19 @@ class DryRunEngine:
 
         with ThreadPoolExecutor(max_workers=5) as executor:
 
-            min_future = executor.submit(
-                self._get_min_value
-            )
-
-            max_future = executor.submit(
-                self._get_max_value
-            )
-
+            min_future = executor.submit(self._get_min_value)
+            max_future = executor.submit(self._get_max_value)
             timestamp_columns_future = executor.submit(
                 self._get_timestamp_columns
             )
-
-            table_size_future = executor.submit(
-                self._get_table_size_gb
-            )
-
-            index_status_future = executor.submit(
-                self._get_index_status
-            )
+            table_size_future = executor.submit(self._get_table_size_gb)
+            index_status_future = executor.submit(self._get_index_status)
 
             min_value = min_future.result()
             max_value = max_future.result()
             timestamp_columns = timestamp_columns_future.result()
             table_size_gb = table_size_future.result()
             index_exists = index_status_future.result()
-
-        #######################################################################
-        # EMPTY TABLE
-        #######################################################################
 
         if min_value is None:
 
@@ -359,6 +343,57 @@ class TableProcessor:
         self.operation_config = operation_config
         self.table_config = table_config
         self.logger = logger
+
+    ###########################################################################
+    # POST-VALIDATION HELPERS
+    ###########################################################################
+
+    def _get_source_count(self):
+
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
+
+            repo = MetadataRepository(conn)
+
+            return repo.table_rowcount(
+                self.table_config.schema,
+                self.table_config.table_name,
+            )
+
+    def _get_target_count(self, target_table):
+
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
+
+            repo = MetadataRepository(conn)
+
+            return repo.table_rowcount(
+                self.table_config.schema,
+                target_table,
+            )
+
+    def _run_analyze(self, target_table):
+
+        with get_connection(
+            self.global_config,
+            self.operation_config,
+        ) as conn:
+
+            repo = MetadataRepository(conn)
+
+            repo.analyze_table(
+                self.table_config.schema,
+                target_table,
+            )
+
+        return {
+            "enabled": True,
+            "status": "COMPLETED",
+        }
 
     def execute(self):
 
@@ -550,45 +585,50 @@ class TableProcessor:
         #######################################################################
 
         rowcount_validation = None
-
-        if self.table_config.validate_rowcount:
-
-            with get_connection(
-                self.global_config,
-                self.operation_config,
-            ) as conn:
-
-                repo = MetadataRepository(conn)
-
-                source_count = repo.table_rowcount(
-                    self.table_config.schema, self.table_config.table_name
-                )
-
-                target_count = repo.table_rowcount(
-                    self.table_config.schema, target_table
-                )
-
-                rowcount_validation = {
-                    "enabled": True,
-                    "source_count": source_count,
-                    "target_count": target_count,
-                    "status": ("MATCH" if source_count == target_count else "MISMATCH"),
-                }
-
         analyze_status = None
 
+        post_validation_tasks = {}
+
+        if self.table_config.validate_rowcount:
+            post_validation_tasks["source_count"] = self._get_source_count
+            post_validation_tasks["target_count"] = (
+                lambda: self._get_target_count(target_table)
+            )
+
         if self.table_config.analyze_after_load:
+            post_validation_tasks["analyze"] = (
+                lambda: self._run_analyze(target_table)
+            )
 
-            with get_connection(
-                self.global_config,
-                self.operation_config,
-            ) as conn:
+        if post_validation_tasks:
 
-                repo = MetadataRepository(conn)
+            with ThreadPoolExecutor(
+                max_workers=len(post_validation_tasks)
+            ) as executor:
 
-                repo.analyze_table(self.table_config.schema, target_table)
+                futures = {
+                    task_name: executor.submit(task)
+                    for task_name, task in post_validation_tasks.items()
+                }
 
-                analyze_status = {"enabled": True, "status": "COMPLETED"}
+                if self.table_config.validate_rowcount:
+
+                    source_count = futures["source_count"].result()
+                    target_count = futures["target_count"].result()
+
+                    rowcount_validation = {
+                        "enabled": True,
+                        "source_count": source_count,
+                        "target_count": target_count,
+                        "status": (
+                            "MATCH"
+                            if source_count == target_count
+                            else "MISMATCH"
+                        ),
+                    }
+
+                if self.table_config.analyze_after_load:
+                    analyze_status = futures["analyze"].result()
 
         #######################################################################
         # SUMMARY
