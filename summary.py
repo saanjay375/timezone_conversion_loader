@@ -3,14 +3,6 @@ summary.py
 
 Migration summary generation.
 
-Responsibilities
-----------------
-- Final status determination
-- Summary object creation
-- JSON summary file creation
-- Atomic file writing
-- Migration statistics reporting
-
 Author: Timezone Conversion Loader
 """
 
@@ -19,94 +11,57 @@ from __future__ import annotations
 import json
 import os
 
-from enum import Enum
 from dataclasses import dataclass
-
 from datetime import datetime
+from enum import Enum
+
+from config import get_effective_postgresql_session_settings
 from paths import get_summary_file
-
-from config import (
-    get_effective_postgresql_session_settings,
-)
-
-###############################################################################
-# STATUS ENUM
-###############################################################################
 
 
 class SummaryStatus(Enum):
-
     COMPLETED = "COMPLETED"
-
     COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
-
     FAILED = "FAILED"
-
-
-###############################################################################
-# SUMMARY MODEL
-###############################################################################
 
 
 @dataclass
 class OperationInfo:
-
     type: str
-
     source_timezone: str
-
     target_timezone: str
-
     updated_columns: list
-
     updated_column_count: int
-
     driving_column: str
 
 
 @dataclass
+class ValidationInfo:
+    timestamp_update_validation: dict | None = None
+    rowcount_lob_validation: dict | None = None
+
+
+@dataclass
 class SummaryFile:
-
     schema: str
-
     source_table: str
-
     target_table: str
-
     status: str
-
     chunk_size: str
-
     parallel_threads: int
-
     startvalue: str | None
-
     total_chunks: int
-
     completed_chunks: int
-
     failed_chunks: int
-
     null_chunk_processed: bool
-
     total_rows_loaded: int
-
     rowcount_validation: dict | None
-
     analyze_status: dict | None
-
     start_time: datetime
-
     end_time: datetime
-
     duration_seconds: int
-
     operation: OperationInfo | None = None
-
-
-###############################################################################
-# SUMMARY MANAGER
-###############################################################################
+    validation: ValidationInfo | None = None
 
 
 class SummaryManager:
@@ -119,22 +74,13 @@ class SummaryManager:
         logger,
         timestamp_columns=None,
     ):
-
         self.global_config = global_config
         self.operation_config = operation_config
-
         self.table_config = table_config
-
         self.logger = logger
-
         self.timestamp_columns = timestamp_columns or []
 
-    ###########################################################################
-    # FILE PATH
-    ###########################################################################
-
     def get_summary_file_path(self):
-
         return str(
             get_summary_file(
                 self.table_config.schema,
@@ -142,25 +88,55 @@ class SummaryManager:
             )
         )
 
-    ###########################################################################
-    # STATUS
-    ###########################################################################
+    def build_validation_metadata(self, statistics):
+        if self.table_config.timestamp_update_validation:
+            chunks_validated = statistics.timestamp_chunks_validated
+            mismatch_count = statistics.timestamp_mismatch_count
+
+            if chunks_validated == 0:
+                timestamp_status = "NOT_RUN"
+            elif mismatch_count > 0:
+                timestamp_status = "FAILED"
+            else:
+                timestamp_status = "PASSED"
+
+            timestamp_validation = {
+                "enabled": True,
+                "chunks_validated": chunks_validated,
+                "rows_validated": statistics.timestamp_rows_validated,
+                "mismatch_count": mismatch_count,
+                "columns_validated": statistics.timestamp_columns_validated,
+                "duration_seconds": (
+                    statistics.timestamp_validation_duration_seconds
+                ),
+                "status": timestamp_status,
+            }
+        else:
+            timestamp_validation = {
+                "enabled": False,
+                "status": "DISABLED",
+            }
+
+        rowcount_lob_validation = {
+            "enabled": self.table_config.rowcount_lob_validation,
+            "status": (
+                "NOT_RUN"
+                if self.table_config.rowcount_lob_validation
+                else "DISABLED"
+            ),
+        }
+
+        return ValidationInfo(
+            timestamp_update_validation=timestamp_validation,
+            rowcount_lob_validation=rowcount_lob_validation,
+        )
 
     def determine_status(self, statistics, execution_failed=False):
-
         if execution_failed:
-
             return SummaryStatus.FAILED
-
         if statistics.failed_chunks > 0:
-
             return SummaryStatus.COMPLETED_WITH_ERRORS
-
         return SummaryStatus.COMPLETED
-
-    ###########################################################################
-    # BUILD SUMMARY
-    ###########################################################################
 
     def build_summary(
         self,
@@ -172,13 +148,11 @@ class SummaryManager:
         analyze_status=None,
         execution_failed=False,
     ):
-
         duration_seconds = int((end_time - start_time).total_seconds())
-
         target_table = (
-            self.table_config.table_name + self.operation_config.target_table_suffix
+            self.table_config.table_name
+            + self.operation_config.target_table_suffix
         )
-
         operation = OperationInfo(
             type=self.operation_config.type,
             source_timezone=self.operation_config.source_timezone,
@@ -207,17 +181,13 @@ class SummaryManager:
             end_time=end_time,
             duration_seconds=duration_seconds,
             operation=operation,
+            validation=self.build_validation_metadata(statistics),
         )
 
-    ###########################################################################
-    # TO DICT
-    ###########################################################################
-    def operation_to_dict(self, operation: OperationInfo | None):
-
+    @staticmethod
+    def operation_to_dict(operation: OperationInfo | None):
         if operation is None:
-
             return None
-
         return {
             "type": operation.type,
             "source_timezone": operation.source_timezone,
@@ -227,87 +197,55 @@ class SummaryManager:
             "driving_column": operation.driving_column,
         }
 
-    def to_dict(self, summary: SummaryFile):
-
+    @staticmethod
+    def validation_to_dict(validation: ValidationInfo | None):
+        if validation is None:
+            return None
         return {
-            ###################################################################
-            # TABLE
-            ###################################################################
+            "timestamp_update_validation": (
+                validation.timestamp_update_validation
+            ),
+            "rowcount_lob_validation": validation.rowcount_lob_validation,
+        }
+
+    def to_dict(self, summary: SummaryFile):
+        return {
             "schema": summary.schema,
             "source_table": summary.source_table,
             "target_table": summary.target_table,
-            ###################################################################
-            # OPERATION
-            ###################################################################
             "operation": self.operation_to_dict(summary.operation),
+            "validation": self.validation_to_dict(summary.validation),
             "postgresql_session_settings": (
                 get_effective_postgresql_session_settings(
                     self.global_config,
                     self.operation_config,
                 )
             ),
-            ###################################################################
-            # STATUS
-            ###################################################################
             "status": summary.status,
-            ###################################################################
-            # CONFIGURATION
-            ###################################################################
             "chunk_size": summary.chunk_size,
             "parallel_threads": summary.parallel_threads,
             "startvalue": summary.startvalue,
-            ###################################################################
-            # CHUNKS
-            ###################################################################
             "total_chunks": summary.total_chunks,
             "completed_chunks": summary.completed_chunks,
             "failed_chunks": summary.failed_chunks,
             "null_chunk_processed": summary.null_chunk_processed,
-            ###################################################################
-            # LOAD METRICS
-            ###################################################################
             "total_rows_loaded": summary.total_rows_loaded,
-            ###################################################################
-            # VALIDATION
-            ###################################################################
             "rowcount_validation": summary.rowcount_validation,
-            ###################################################################
-            # ANALYZE
-            ###################################################################
             "analyze_status": summary.analyze_status,
-            ###################################################################
-            # TIMING
-            ###################################################################
             "start_time": summary.start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": summary.end_time.strftime("%Y-%m-%d %H:%M:%S"),
             "duration_seconds": summary.duration_seconds,
         }
 
-    ###########################################################################
-    # WRITE SUMMARY
-    ###########################################################################
-
     def write_summary(self, summary: SummaryFile):
-
         payload = self.to_dict(summary)
-
         summary_file = self.get_summary_file_path()
-
         tmp_file = summary_file + ".tmp"
-
         os.makedirs(os.path.dirname(summary_file), exist_ok=True)
-
         with open(tmp_file, "w", encoding="utf-8") as handle:
-
             json.dump(payload, handle, indent=4)
-
         os.replace(tmp_file, summary_file)
-
-        self.logger.info(f"SummaryFileCreated=" f"{summary_file}")
-
-    ###########################################################################
-    # CREATE SUMMARY
-    ###########################################################################
+        self.logger.info(f"SummaryFileCreated={summary_file}")
 
     def create_summary(
         self,
@@ -319,7 +257,6 @@ class SummaryManager:
         analyze_status=None,
         execution_failed=False,
     ):
-
         summary = self.build_summary(
             statistics=statistics,
             total_chunks=total_chunks,
@@ -329,7 +266,5 @@ class SummaryManager:
             analyze_status=analyze_status,
             execution_failed=execution_failed,
         )
-
         self.write_summary(summary)
-
         return summary

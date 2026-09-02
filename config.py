@@ -214,7 +214,6 @@ def validate_chunk_size(chunk_size):
 
 
 class DatabaseConfigValidator:
-
     @staticmethod
     def validate(db_cfg: DatabaseConfig):
 
@@ -237,7 +236,6 @@ class DatabaseConfigValidator:
 
 
 class TableConfigValidator:
-
     @staticmethod
     def validate(table_cfg: TableConfig):
 
@@ -260,7 +258,6 @@ class TableConfigValidator:
 
 
 class GlobalConfigValidator:
-
     @staticmethod
     def validate(cfg: GlobalConfig):
 
@@ -298,7 +295,6 @@ class GlobalConfigValidator:
 
 
 class ConfigLoader:
-
     @staticmethod
     def load(config_file: str) -> GlobalConfig:
 
