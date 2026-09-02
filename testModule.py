@@ -29,15 +29,15 @@ class Chunk:
 
 class Cursor:
     rowcount = 100
-    def __init__(self, result): self.result = result
+    def __init__(self, validation_row): self.validation_row = validation_row
     def __enter__(self): return self
     def __exit__(self, *args): return False
     def execute(self, sql_text, values=None): pass
-    def fetchone(self): return self.result
+    def fetchone(self): return self.validation_row
 
 class Connection:
-    def __init__(self, result): self.result = result
-    def cursor(self): return Cursor(self.result)
+    def __init__(self, validation_row): self.validation_row = validation_row
+    def cursor(self): return Cursor(self.validation_row)
     def commit(self): pass
 
 class Repository:
@@ -49,11 +49,14 @@ class Logger:
     def error(self, message, *args): print(message % args if args else message)
 
 class SQL:
-    table_context = {"timestamp_columns": ["created_at", "updated_at"]}
+    table_context = {
+        "timestamp_columns": [],
+        "lob_columns": ["message_text", "payload_bytes"],
+    }
     def build_range_insert_sql(self): return "INSERT"
     def build_null_chunk_sql(self): return "INSERT NULL"
-    def build_range_timestamp_validation_sql(self): return "VALIDATE"
-    def build_null_timestamp_validation_sql(self): return "VALIDATE NULL"
+    def build_range_rowcount_lob_validation_sql(self): return "VALIDATE ROWCOUNT LOB"
+    def build_null_rowcount_lob_validation_sql(self): return "VALIDATE NULL ROWCOUNT LOB"
 
 db = DatabaseConfig("localhost", 5432, "test", "test", "test")
 global_config = GlobalConfig(database=db)
@@ -68,15 +71,22 @@ table = TableConfig(
     table_name="pr_index_test",
     driving_column="pxcommitdatetime",
     chunk_size="1M",
-    timestamp_update_validation=True,
+    rowcount_lob_validation=True,
 )
 
 import processor
 processor.MetadataRepository = Repository
 
+# source_count, target_count, then four metrics per LOB column.
+PASSING_ROW = (
+    100, 100,
+    250, 10000, 250, 10000,
+    4096, 250000, 4096, 250000,
+)
+
 @contextmanager
 def passing_connection(*args, **kwargs):
-    yield Connection((100, 0))
+    yield Connection(PASSING_ROW)
 
 with tempfile.TemporaryDirectory() as temp:
     processor.get_connection = passing_connection
@@ -86,25 +96,35 @@ with tempfile.TemporaryDirectory() as temp:
         global_config, operation, table, Logger(), SQL(), checkpoint, stats
     )
     result = worker.process_chunk(Chunk())
-    assert result.success
-    assert result.timestamp_validation.status == "PASSED"
+
+    assert result.success is True
+    assert result.rowcount_lob_validation.status == "PASSED"
+    assert result.rowcount_lob_validation.source_count == 100
+    assert result.rowcount_lob_validation.target_count == 100
+    assert result.rowcount_lob_validation.lob_columns_validated == 2
     assert checkpoint.load()["resume_watermark_chunk"] == 1
 
-    manager = SummaryManager(
-        global_config, operation, table, Logger(), ["created_at", "updated_at"]
-    )
+    manager = SummaryManager(global_config, operation, table, Logger(), [])
     summary = manager.build_summary(
         stats, 1, datetime(2025, 1, 1), datetime(2025, 1, 1, 0, 0, 5)
     )
     payload = manager.to_dict(summary)
-    assert payload["validation"]["timestamp_update_validation"]["status"] == "PASSED"
-    assert payload["validation"]["timestamp_update_validation"]["rows_validated"] == 100
+    validation = payload["validation"]["rowcount_lob_validation"]
+    assert validation["status"] == "PASSED"
+    assert validation["rows_validated"] == 100
+    assert validation["lob_columns_validated"] == 2
 
-print("CHANGE-6C PASS PATH TEST PASSED")
+print("CHANGE-6D PASS PATH TEST PASSED")
+
+FAILING_ROW = (
+    100, 99,
+    250, 10000, 250, 9999,
+    4096, 250000, 4096, 250000,
+)
 
 @contextmanager
 def failing_connection(*args, **kwargs):
-    yield Connection((100, 3))
+    yield Connection(FAILING_ROW)
 
 with tempfile.TemporaryDirectory() as temp:
     processor.get_connection = failing_connection
@@ -114,23 +134,28 @@ with tempfile.TemporaryDirectory() as temp:
         global_config, operation, table, Logger(), SQL(), checkpoint, stats
     )
     result = worker.process_chunk(Chunk())
-    assert not result.success
+
+    assert result.success is False
     assert stats.failed_chunks == 1
     assert checkpoint.load() is None
 
-print("CHANGE-6C FAILURE BLOCKS WATERMARK TEST PASSED")
+print("CHANGE-6D FAILURE BLOCKS WATERMARK TEST PASSED")
 
 sql = SQLGenerator(
     global_config,
     operation,
     table,
     {
-        "all_columns": ["id", "pxcommitdatetime", "created_at"],
-        "timestamp_columns": ["pxcommitdatetime", "created_at"],
+        "all_columns": ["id", "pxcommitdatetime", "message_text", "payload_bytes"],
+        "timestamp_columns": ["pxcommitdatetime"],
         "primary_key_columns": ["id"],
+        "lob_columns": ["message_text", "payload_bytes"],
     },
-).build_range_timestamp_validation_sql()
-assert "IS DISTINCT FROM" in sql
-assert "LEFT JOIN" in sql
+).build_range_rowcount_lob_validation_sql()
+
+assert "COUNT(*) AS source_count" in sql
+assert "target_count" in sql
+assert 'octet_length(s."message_text")' in sql
+assert 'octet_length(t."payload_bytes")' in sql
 assert 's."pxcommitdatetime" >= %s' in sql
-print("CHANGE-6C SQL GENERATION TEST PASSED")
+print("CHANGE-6D SQL GENERATION TEST PASSED")

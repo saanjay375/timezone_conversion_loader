@@ -34,6 +34,18 @@ class TimestampValidationResult:
 
 
 @dataclass
+class RowcountLobValidationResult:
+    enabled: bool
+    source_count: int = 0
+    target_count: int = 0
+    mismatch_count: int = 0
+    lob_columns_validated: int = 0
+    lob_metrics: dict | None = None
+    duration_seconds: int = 0
+    status: str = "DISABLED"
+
+
+@dataclass
 class ChunkResult:
     chunk_number: int
     rows_inserted: int
@@ -41,6 +53,7 @@ class ChunkResult:
     success: bool
     error_message: str | None = None
     timestamp_validation: TimestampValidationResult | None = None
+    rowcount_lob_validation: RowcountLobValidationResult | None = None
 
 
 class StatisticsCollector:
@@ -56,6 +69,11 @@ class StatisticsCollector:
         self.timestamp_mismatch_count = 0
         self.timestamp_columns_validated = 0
         self.timestamp_validation_duration_seconds = 0
+        self.rowcount_lob_chunks_validated = 0
+        self.rowcount_lob_rows_validated = 0
+        self.rowcount_lob_mismatch_count = 0
+        self.lob_columns_validated = 0
+        self.rowcount_lob_validation_duration_seconds = 0
 
     def record_success(self, chunk, result: ChunkResult):
         with self._lock:
@@ -77,6 +95,19 @@ class StatisticsCollector:
                     validation.duration_seconds
                 )
 
+            rowcount_lob = result.rowcount_lob_validation
+            if rowcount_lob and rowcount_lob.enabled:
+                self.rowcount_lob_chunks_validated += 1
+                self.rowcount_lob_rows_validated += rowcount_lob.source_count
+                self.rowcount_lob_mismatch_count += rowcount_lob.mismatch_count
+                self.lob_columns_validated = max(
+                    self.lob_columns_validated,
+                    rowcount_lob.lob_columns_validated,
+                )
+                self.rowcount_lob_validation_duration_seconds += (
+                    rowcount_lob.duration_seconds
+                )
+
     def record_failure(self):
         with self._lock:
             self.failed_chunks += 1
@@ -94,6 +125,13 @@ class StatisticsCollector:
                 "timestamp_columns_validated": self.timestamp_columns_validated,
                 "timestamp_validation_duration_seconds": (
                     self.timestamp_validation_duration_seconds
+                ),
+                "rowcount_lob_chunks_validated": self.rowcount_lob_chunks_validated,
+                "rowcount_lob_rows_validated": self.rowcount_lob_rows_validated,
+                "rowcount_lob_mismatch_count": self.rowcount_lob_mismatch_count,
+                "lob_columns_validated": self.lob_columns_validated,
+                "rowcount_lob_validation_duration_seconds": (
+                    self.rowcount_lob_validation_duration_seconds
                 ),
             }
 
@@ -154,22 +192,24 @@ class CheckpointManager:
         os.replace(tmp_file, self.checkpoint_file)
 
     @staticmethod
-    def _validation_to_dict(timestamp_validation):
-        if timestamp_validation is None:
+    def _validation_to_dict(validation):
+        if validation is None:
             return None
-        return {
-            "enabled": timestamp_validation.enabled,
-            "rows_validated": timestamp_validation.rows_validated,
-            "mismatch_count": timestamp_validation.mismatch_count,
-            "columns_validated": timestamp_validation.columns_validated,
-            "duration_seconds": timestamp_validation.duration_seconds,
-            "status": timestamp_validation.status,
-        }
+        return dict(validation.__dict__)
 
-    def update(self, chunk, rows_inserted, timestamp_validation=None):
+    def update(
+        self,
+        chunk,
+        rows_inserted,
+        timestamp_validation=None,
+        rowcount_lob_validation=None,
+    ):
         with self._lock:
             payload = self._load_unlocked()
             validation_payload = self._validation_to_dict(timestamp_validation)
+            rowcount_lob_payload = self._validation_to_dict(
+                rowcount_lob_validation
+            )
 
             if chunk.is_null_chunk:
                 payload["null_chunk_completed"] = True
@@ -178,6 +218,9 @@ class CheckpointManager:
                     + int(rows_inserted)
                 )
                 payload["null_chunk_validation"] = validation_payload
+                payload["null_chunk_rowcount_lob_validation"] = (
+                    rowcount_lob_payload
+                )
             else:
                 chunk_number = int(chunk.chunk_number)
                 completed_chunks = {
@@ -196,6 +239,7 @@ class CheckpointManager:
                     "predicate": chunk.predicate,
                     "rows_inserted": cumulative_rows,
                     "timestamp_validation": validation_payload,
+                    "rowcount_lob_validation": rowcount_lob_payload,
                 }
                 watermark = self._calculate_resume_watermark(
                     payload["completed_chunks"]
@@ -306,6 +350,75 @@ class ChunkProcessor:
 
         return result
 
+    def _validate_rowcount_lob_chunk(self, conn, chunk):
+        validation_start = time.time()
+        lob_columns = self.sql_generator.table_context.get("lob_columns", [])
+
+        with conn.cursor() as cur:
+            if chunk.is_null_chunk:
+                sql_text = (
+                    self.sql_generator.build_null_rowcount_lob_validation_sql()
+                )
+                cur.execute(sql_text)
+            else:
+                sql_text = (
+                    self.sql_generator.build_range_rowcount_lob_validation_sql()
+                )
+                cur.execute(sql_text, (chunk.start_value, chunk.end_value))
+
+            row = cur.fetchone()
+
+        source_count = int(row[0])
+        target_count = int(row[1])
+        mismatch_count = 0 if source_count == target_count else 1
+        lob_metrics = {}
+        offset = 2
+
+        for column in lob_columns:
+            source_max, source_sum, target_max, target_sum = row[offset:offset + 4]
+            source_max = int(source_max or 0)
+            source_sum = int(source_sum or 0)
+            target_max = int(target_max or 0)
+            target_sum = int(target_sum or 0)
+            matched = source_max == target_max and source_sum == target_sum
+            if not matched:
+                mismatch_count += 1
+            lob_metrics[column] = {
+                "source_max_length": source_max,
+                "source_sum_length": source_sum,
+                "target_max_length": target_max,
+                "target_sum_length": target_sum,
+                "status": "MATCH" if matched else "MISMATCH",
+            }
+            offset += 4
+
+        result = RowcountLobValidationResult(
+            enabled=True,
+            source_count=source_count,
+            target_count=target_count,
+            mismatch_count=mismatch_count,
+            lob_columns_validated=len(lob_columns),
+            lob_metrics=lob_metrics,
+            duration_seconds=int(time.time() - validation_start),
+            status="PASSED" if mismatch_count == 0 else "FAILED",
+        )
+
+        self.logger.info(
+            f"Chunk={chunk.chunk_number} "
+            f"RowcountLobSourceCount={source_count} "
+            f"RowcountLobTargetCount={target_count} "
+            f"RowcountLobMismatches={mismatch_count} "
+            f"RowcountLobStatus={result.status}"
+        )
+
+        if mismatch_count > 0:
+            raise ValueError(
+                f"Rowcount/LOB validation failed for chunk "
+                f"{chunk.chunk_number}: {mismatch_count} mismatch(es)"
+            )
+
+        return result
+
     def process_chunk(self, chunk) -> ChunkResult:
         start_time = time.time()
 
@@ -336,10 +449,18 @@ class ChunkProcessor:
                 if self.table_config.timestamp_update_validation:
                     timestamp_validation = self._validate_timestamp_chunk(conn, chunk)
 
+                rowcount_lob_validation = None
+
+                if self.table_config.rowcount_lob_validation:
+                    rowcount_lob_validation = self._validate_rowcount_lob_chunk(
+                        conn, chunk
+                    )
+
                 self.checkpoint_manager.update(
                     chunk,
                     rows_inserted,
                     timestamp_validation,
+                    rowcount_lob_validation,
                 )
 
                 duration = int(time.time() - start_time)
@@ -349,6 +470,7 @@ class ChunkProcessor:
                     duration_seconds=duration,
                     success=True,
                     timestamp_validation=timestamp_validation,
+                    rowcount_lob_validation=rowcount_lob_validation,
                 )
 
                 self.statistics.record_success(chunk, result)
@@ -395,8 +517,10 @@ def build_table_context(metadata_repository, schema, table_name):
         schema,
         table_name,
     )
+    lob_columns = metadata_repository.get_lob_columns(schema, table_name)
     return {
         "all_columns": all_columns,
         "timestamp_columns": timestamp_columns,
         "primary_key_columns": primary_key_columns,
+        "lob_columns": lob_columns,
     }

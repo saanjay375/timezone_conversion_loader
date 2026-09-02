@@ -117,14 +117,33 @@ class SummaryManager:
                 "status": "DISABLED",
             }
 
-        rowcount_lob_validation = {
-            "enabled": self.table_config.rowcount_lob_validation,
-            "status": (
-                "NOT_RUN"
-                if self.table_config.rowcount_lob_validation
-                else "DISABLED"
-            ),
-        }
+        if self.table_config.rowcount_lob_validation:
+            chunks_validated = statistics.rowcount_lob_chunks_validated
+            mismatch_count = statistics.rowcount_lob_mismatch_count
+
+            if chunks_validated == 0:
+                rowcount_lob_status = "NOT_RUN"
+            elif mismatch_count > 0:
+                rowcount_lob_status = "FAILED"
+            else:
+                rowcount_lob_status = "PASSED"
+
+            rowcount_lob_validation = {
+                "enabled": True,
+                "chunks_validated": chunks_validated,
+                "rows_validated": statistics.rowcount_lob_rows_validated,
+                "mismatch_count": mismatch_count,
+                "lob_columns_validated": statistics.lob_columns_validated,
+                "duration_seconds": (
+                    statistics.rowcount_lob_validation_duration_seconds
+                ),
+                "status": rowcount_lob_status,
+            }
+        else:
+            rowcount_lob_validation = {
+                "enabled": False,
+                "status": "DISABLED",
+            }
 
         return ValidationInfo(
             timestamp_update_validation=timestamp_validation,

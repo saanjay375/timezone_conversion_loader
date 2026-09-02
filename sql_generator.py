@@ -162,6 +162,55 @@ class SQLGenerator:
             f's."{driving_column}" IS NULL'
         )
 
+    def _build_rowcount_lob_validation_sql(self, where_clause: str) -> str:
+        schema = self.table_config.schema
+        source_table = self.table_config.table_name
+        target_table = self.target_table_name()
+        join_predicate = self._build_primary_key_join()
+        primary_key_columns = self.table_context.get("primary_key_columns", [])
+        lob_columns = self.table_context.get("lob_columns", [])
+
+        if not primary_key_columns:
+            raise ValueError(
+                "Rowcount/LOB validation requires a primary key on the source table"
+            )
+
+        select_items = [
+            "COUNT(*) AS source_count",
+            f'COUNT(t."{primary_key_columns[0]}") AS target_count',
+        ]
+
+        for column in lob_columns:
+            select_items.extend(
+                [
+                    f'MAX(octet_length(s."{column}")) AS source_{column}_max_length',
+                    f'COALESCE(SUM(octet_length(s."{column}")), 0) AS source_{column}_sum_length',
+                    f'MAX(octet_length(t."{column}")) AS target_{column}_max_length',
+                    f'COALESCE(SUM(octet_length(t."{column}")), 0) AS target_{column}_sum_length',
+                ]
+            )
+
+        return f"""
+        SELECT
+            {", ".join(select_items)}
+        FROM {schema}.{source_table} s
+        LEFT JOIN {schema}.{target_table} t
+          ON {join_predicate}
+        WHERE {where_clause}
+        """
+
+    def build_range_rowcount_lob_validation_sql(self) -> str:
+        driving_column = self.table_config.driving_column
+        return self._build_rowcount_lob_validation_sql(
+            f's."{driving_column}" >= %s AND s."{driving_column}" < %s'
+        )
+
+    def build_null_rowcount_lob_validation_sql(self) -> str:
+        driving_column = self.table_config.driving_column
+        return self._build_rowcount_lob_validation_sql(
+            f's."{driving_column}" IS NULL'
+        )
+
     def describe_range_chunk(self, chunk) -> str:
         return f"{chunk.start_value} to {chunk.end_value}"
 
@@ -187,5 +236,11 @@ class SQLGenerator:
             ),
             "null_timestamp_validation_sql": (
                 self.build_null_timestamp_validation_sql()
+            ),
+            "range_rowcount_lob_validation_sql": (
+                self.build_range_rowcount_lob_validation_sql()
+            ),
+            "null_rowcount_lob_validation_sql": (
+                self.build_null_rowcount_lob_validation_sql()
             ),
         }
