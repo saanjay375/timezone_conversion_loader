@@ -12,7 +12,7 @@ metadata_stub.get_connection = None
 sys.modules["metadata"] = metadata_stub
 
 paths_stub = types.ModuleType("paths")
-paths_stub.get_summary_file = lambda schema, table: "summary.json"
+paths_stub.get_summary_file = lambda schema, table: f"{schema}_{table}_summary.json"
 sys.modules["paths"] = paths_stub
 
 from config import (
@@ -859,3 +859,140 @@ assert validation["validation_log_details"] is False
 print("CHANGE-6E-D-1 VALIDATION CONFIGURATION REPORTING TEST PASSED")
 
 print("ALL CHANGE-6E-D-1 TESTS PASSED")
+# ------------------------------------------------------------------
+# CHANGE-6E-D-2: VALIDATION STATUS SEPARATION
+# ------------------------------------------------------------------
+
+status_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    timestamp_update_validation=True,
+    rowcount_lob_validation=True,
+)
+
+status_stats = StatisticsCollector()
+
+status_stats.timestamp_chunks_validated = 1
+status_stats.timestamp_rows_validated = 100
+
+status_manager = SummaryManager(
+    global_config,
+    operation,
+    status_table,
+    Logger(),
+    [],
+)
+
+status_summary = status_manager.build_summary(
+    status_stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+payload = status_manager.to_dict(status_summary)
+
+assert payload["status"] == "COMPLETED"
+assert payload["validation_status"] == "PASSED"
+
+print("CHANGE-6E-D-2 VALIDATION STATUS SEPARATION TEST PASSED")
+
+print("ALL CHANGE-6E-D-2 TESTS PASSED")
+
+# ------------------------------------------------------------------
+# CHANGE-6E-D-3: VALIDATION REPORT BLOCK
+# ------------------------------------------------------------------
+
+report_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    timestamp_update_validation=True,
+    rowcount_lob_validation=True,
+)
+
+report_stats = StatisticsCollector()
+
+report_stats.timestamp_chunks_validated = 1
+report_stats.timestamp_rows_validated = 100
+
+report_stats.rowcount_lob_chunks_validated = 1
+report_stats.rowcount_lob_rows_validated = 100
+
+report_manager = SummaryManager(
+    global_config,
+    operation,
+    report_table,
+    Logger(),
+    [],
+)
+
+report_summary = report_manager.build_summary(
+    report_stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+payload = report_manager.to_dict(report_summary)
+
+validation_report = payload["validation_report"]
+
+assert validation_report["executed"] is True
+assert validation_report["overall_status"] == "PASSED"
+assert validation_report["validation_count"] == 2
+assert validation_report["passed_validation_count"] == 2
+assert validation_report["failed_validation_count"] == 0
+assert validation_report["disabled_validation_count"] == 0
+assert validation_report["not_run_validation_count"] == 0
+assert validation_report["rows_validated"] == 200
+assert validation_report["mismatch_count"] == 0
+
+print("CHANGE-6E-D-3 VALIDATION REPORT BLOCK TEST PASSED")
+
+print("ALL CHANGE-6E-D-3 TESTS PASSED")
+# ------------------------------------------------------------------
+# CHANGE-6E-D-4: VALIDATION CAPABILITY REPORTING
+# ------------------------------------------------------------------
+
+capability_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    timestamp_update_validation=True,
+    rowcount_lob_validation=True,
+    validation_fail_on_error=True,
+    validation_log_details=False,
+)
+
+capability_manager = SummaryManager(
+    global_config,
+    operation,
+    capability_table,
+    Logger(),
+    [],
+)
+
+capability_summary = capability_manager.build_summary(
+    StatisticsCollector(),
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+payload = capability_manager.to_dict(capability_summary)
+
+validation_configuration = payload["validation_configuration"]
+
+assert validation_configuration["timestamp_update_validation"] is True
+assert validation_configuration["rowcount_lob_validation"] is True
+assert validation_configuration["validation_fail_on_error"] is True
+assert validation_configuration["validation_log_details"] is False
+
+print("CHANGE-6E-D-4 VALIDATION CAPABILITY REPORTING TEST PASSED")
+
+print("ALL CHANGE-6E-D-4 TESTS PASSED")

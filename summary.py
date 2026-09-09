@@ -63,6 +63,7 @@ class SummaryFile:
     source_table: str
     target_table: str
     status: str
+    validation_status: str
     chunk_size: str
     parallel_threads: int
     startvalue: str | None
@@ -78,6 +79,8 @@ class SummaryFile:
     duration_seconds: int
     operation: OperationInfo | None = None
     validation: ValidationInfo | None = None
+    validation_report: dict | None = None
+    validation_configuration: dict | None = None
 
 
 class SummaryManager:
@@ -173,6 +176,35 @@ class SummaryManager:
             rowcount_lob_validation=rowcount_lob_validation,
         )
 
+    def build_validation_report(
+        self,
+        validation: ValidationInfo | None,
+    ):
+        if validation is None:
+            return None
+
+        return {
+            "executed": (validation.validation_count > 0),
+            "overall_status": validation.overall_status,
+            "validation_count": validation.validation_count,
+            "passed_validation_count": validation.passed_validation_count,
+            "failed_validation_count": validation.failed_validation_count,
+            "disabled_validation_count": validation.disabled_validation_count,
+            "not_run_validation_count": validation.not_run_validation_count,
+            "rows_validated": validation.rows_validated,
+            "mismatch_count": validation.mismatch_count,
+        }
+
+    def build_validation_configuration(self):
+        return {
+            "timestamp_update_validation": (
+                self.table_config.timestamp_update_validation
+            ),
+            "rowcount_lob_validation": (self.table_config.rowcount_lob_validation),
+            "validation_fail_on_error": (self.table_config.validation_fail_on_error),
+            "validation_log_details": (self.table_config.validation_log_details),
+        }
+
     def determine_status(self, statistics, execution_failed=False):
 
         if execution_failed:
@@ -208,7 +240,9 @@ class SummaryManager:
             updated_column_count=len(self.timestamp_columns),
             driving_column=self.table_config.driving_column,
         )
-
+        validation_metadata = self.build_validation_metadata(statistics)
+        validation_report = self.build_validation_report(validation_metadata)
+        validation_configuration = self.build_validation_configuration()
         return SummaryFile(
             schema=self.table_config.schema,
             source_table=self.table_config.table_name,
@@ -228,7 +262,10 @@ class SummaryManager:
             end_time=end_time,
             duration_seconds=duration_seconds,
             operation=operation,
-            validation=self.build_validation_metadata(statistics),
+            validation=validation_metadata,
+            validation_report=validation_report,
+            validation_configuration=validation_configuration,
+            validation_status=validation_metadata.overall_status,
         )
 
     @staticmethod
@@ -272,6 +309,8 @@ class SummaryManager:
             "target_table": summary.target_table,
             "operation": self.operation_to_dict(summary.operation),
             "validation": self.validation_to_dict(summary.validation),
+            "validation_report": summary.validation_report,
+            "validation_configuration": summary.validation_configuration,
             "postgresql_session_settings": (
                 get_effective_postgresql_session_settings(
                     self.global_config,
@@ -279,6 +318,7 @@ class SummaryManager:
                 )
             ),
             "status": summary.status,
+            "validation_status": summary.validation_status,
             "chunk_size": summary.chunk_size,
             "parallel_threads": summary.parallel_threads,
             "startvalue": summary.startvalue,
