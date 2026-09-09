@@ -315,3 +315,140 @@ assert backward_compatible_table.validation_log_details is True
 print("CHANGE-6E-A BACKWARD COMPATIBILITY TEST PASSED")
 
 print("ALL CHANGE-6D AND CHANGE-6E-A TESTS PASSED")
+
+# ------------------------------------------------------------------
+# CHANGE-6E-B: VALIDATION RESULT AGGREGATION TESTS
+# ------------------------------------------------------------------
+
+# Test 1: PASSED + PASSED => PASSED
+aggregation_stats = StatisticsCollector()
+aggregation_stats.timestamp_chunks_validated = 1
+aggregation_stats.timestamp_rows_validated = 100
+aggregation_stats.timestamp_columns_validated = 1
+aggregation_stats.timestamp_validation_duration_seconds = 2
+aggregation_stats.rowcount_lob_chunks_validated = 1
+aggregation_stats.rowcount_lob_rows_validated = 100
+aggregation_stats.lob_columns_validated = 2
+aggregation_stats.rowcount_lob_validation_duration_seconds = 3
+
+aggregate = aggregation_stats.build_validation_summary(True, True)
+
+assert aggregate.overall_status == "PASSED"
+assert aggregate.timestamp_update_validation_status == "PASSED"
+assert aggregate.rowcount_lob_validation_status == "PASSED"
+assert aggregate.rows_validated == 200
+assert aggregate.mismatch_count == 0
+assert aggregate.timestamp_columns_validated == 1
+assert aggregate.lob_columns_validated == 2
+assert aggregate.duration_seconds == 5
+
+print("CHANGE-6E-B PASSED AGGREGATION TEST PASSED")
+
+# Test 2: FAILED + PASSED => FAILED
+aggregation_stats = StatisticsCollector()
+aggregation_stats.timestamp_chunks_validated = 1
+aggregation_stats.timestamp_rows_validated = 100
+aggregation_stats.timestamp_mismatch_count = 5
+aggregation_stats.timestamp_columns_validated = 1
+aggregation_stats.rowcount_lob_chunks_validated = 1
+aggregation_stats.rowcount_lob_rows_validated = 100
+aggregation_stats.lob_columns_validated = 2
+
+aggregate = aggregation_stats.build_validation_summary(True, True)
+
+assert aggregate.overall_status == "FAILED"
+assert aggregate.timestamp_update_validation_status == "FAILED"
+assert aggregate.rowcount_lob_validation_status == "PASSED"
+assert aggregate.rows_validated == 200
+assert aggregate.mismatch_count == 5
+
+print("CHANGE-6E-B FAILED AGGREGATION TEST PASSED")
+
+# Test 3: Enabled but no validation completed => NOT_RUN
+aggregation_stats = StatisticsCollector()
+aggregate = aggregation_stats.build_validation_summary(True, True)
+
+assert aggregate.overall_status == "NOT_RUN"
+assert aggregate.timestamp_update_validation_status == "NOT_RUN"
+assert aggregate.rowcount_lob_validation_status == "NOT_RUN"
+
+print("CHANGE-6E-B NOT-RUN AGGREGATION TEST PASSED")
+
+# Test 4: Both validation types disabled => DISABLED
+aggregation_stats = StatisticsCollector()
+aggregate = aggregation_stats.build_validation_summary(False, False)
+
+assert aggregate.overall_status == "DISABLED"
+assert aggregate.timestamp_update_validation_status == "DISABLED"
+assert aggregate.rowcount_lob_validation_status == "DISABLED"
+assert aggregate.rows_validated == 0
+assert aggregate.mismatch_count == 0
+
+print("CHANGE-6E-B DISABLED AGGREGATION TEST PASSED")
+
+# Test 5: One validation passed and the other disabled => PASSED
+aggregation_stats = StatisticsCollector()
+aggregation_stats.rowcount_lob_chunks_validated = 1
+aggregation_stats.rowcount_lob_rows_validated = 100
+aggregation_stats.lob_columns_validated = 2
+
+aggregate = aggregation_stats.build_validation_summary(False, True)
+
+assert aggregate.overall_status == "PASSED"
+assert aggregate.timestamp_update_validation_status == "DISABLED"
+assert aggregate.rowcount_lob_validation_status == "PASSED"
+
+print("CHANGE-6E-B PARTIAL ENABLEMENT AGGREGATION TEST PASSED")
+
+# Test 6: Summary serialization contains aggregate and component results
+aggregation_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    timestamp_update_validation=True,
+    rowcount_lob_validation=True,
+)
+
+aggregation_stats = StatisticsCollector()
+aggregation_stats.timestamp_chunks_validated = 1
+aggregation_stats.timestamp_rows_validated = 100
+aggregation_stats.timestamp_columns_validated = 1
+aggregation_stats.timestamp_validation_duration_seconds = 2
+aggregation_stats.rowcount_lob_chunks_validated = 1
+aggregation_stats.rowcount_lob_rows_validated = 100
+aggregation_stats.lob_columns_validated = 2
+aggregation_stats.rowcount_lob_validation_duration_seconds = 3
+
+aggregation_manager = SummaryManager(
+    global_config,
+    operation,
+    aggregation_table,
+    Logger(),
+    ["pxcommitdatetime"],
+)
+aggregation_summary = aggregation_manager.build_summary(
+    aggregation_stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+aggregation_payload = aggregation_manager.to_dict(aggregation_summary)
+validation_payload = aggregation_payload["validation"]
+
+assert validation_payload["overall_status"] == "PASSED"
+assert validation_payload["rows_validated"] == 200
+assert validation_payload["mismatch_count"] == 0
+assert validation_payload["columns_validated"] == 3
+assert validation_payload["duration_seconds"] == 5
+assert validation_payload["timestamp_update_validation"]["enabled"] is True
+assert validation_payload["timestamp_update_validation"]["status"] == "PASSED"
+assert validation_payload["timestamp_update_validation"]["rows_validated"] == 100
+assert validation_payload["rowcount_lob_validation"]["enabled"] is True
+assert validation_payload["rowcount_lob_validation"]["status"] == "PASSED"
+assert validation_payload["rowcount_lob_validation"]["rows_validated"] == 100
+assert validation_payload["rowcount_lob_validation"]["lob_columns_validated"] == 2
+
+print("CHANGE-6E-B SUMMARY SERIALIZATION TEST PASSED")
+
+print("ALL CHANGE-6D, CHANGE-6E-A AND CHANGE-6E-B TESTS PASSED")

@@ -46,6 +46,18 @@ class RowcountLobValidationResult:
 
 
 @dataclass
+class ValidationSummary:
+    overall_status: str = "DISABLED"
+    timestamp_update_validation_status: str = "DISABLED"
+    rowcount_lob_validation_status: str = "DISABLED"
+    rows_validated: int = 0
+    mismatch_count: int = 0
+    timestamp_columns_validated: int = 0
+    lob_columns_validated: int = 0
+    duration_seconds: int = 0
+
+
+@dataclass
 class ChunkResult:
     chunk_number: int
     rows_inserted: int
@@ -74,6 +86,63 @@ class StatisticsCollector:
         self.rowcount_lob_mismatch_count = 0
         self.lob_columns_validated = 0
         self.rowcount_lob_validation_duration_seconds = 0
+
+    @staticmethod
+    def _component_status(enabled, chunks_validated, mismatch_count):
+        if not enabled:
+            return "DISABLED"
+        if chunks_validated == 0:
+            return "NOT_RUN"
+        if mismatch_count > 0:
+            return "FAILED"
+        return "PASSED"
+
+    def build_validation_summary(
+        self,
+        timestamp_validation_enabled,
+        rowcount_lob_validation_enabled,
+    ):
+        with self._lock:
+            timestamp_status = self._component_status(
+                timestamp_validation_enabled,
+                self.timestamp_chunks_validated,
+                self.timestamp_mismatch_count,
+            )
+            rowcount_lob_status = self._component_status(
+                rowcount_lob_validation_enabled,
+                self.rowcount_lob_chunks_validated,
+                self.rowcount_lob_mismatch_count,
+            )
+
+            statuses = [timestamp_status, rowcount_lob_status]
+            if "FAILED" in statuses:
+                overall_status = "FAILED"
+            elif "PASSED" in statuses:
+                overall_status = "PASSED"
+            elif "NOT_RUN" in statuses:
+                overall_status = "NOT_RUN"
+            else:
+                overall_status = "DISABLED"
+
+            return ValidationSummary(
+                overall_status=overall_status,
+                timestamp_update_validation_status=timestamp_status,
+                rowcount_lob_validation_status=rowcount_lob_status,
+                rows_validated=(
+                    self.timestamp_rows_validated
+                    + self.rowcount_lob_rows_validated
+                ),
+                mismatch_count=(
+                    self.timestamp_mismatch_count
+                    + self.rowcount_lob_mismatch_count
+                ),
+                timestamp_columns_validated=self.timestamp_columns_validated,
+                lob_columns_validated=self.lob_columns_validated,
+                duration_seconds=(
+                    self.timestamp_validation_duration_seconds
+                    + self.rowcount_lob_validation_duration_seconds
+                ),
+            )
 
     def record_success(self, chunk, result: ChunkResult):
         with self._lock:

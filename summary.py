@@ -37,6 +37,11 @@ class OperationInfo:
 
 @dataclass
 class ValidationInfo:
+    overall_status: str = "DISABLED"
+    rows_validated: int = 0
+    mismatch_count: int = 0
+    columns_validated: int = 0
+    duration_seconds: int = 0
     timestamp_update_validation: dict | None = None
     rowcount_lob_validation: dict | None = None
 
@@ -89,63 +94,54 @@ class SummaryManager:
         )
 
     def build_validation_metadata(self, statistics):
+        aggregate = statistics.build_validation_summary(
+            self.table_config.timestamp_update_validation,
+            self.table_config.rowcount_lob_validation,
+        )
+
+        timestamp_validation = {
+            "enabled": self.table_config.timestamp_update_validation,
+            "status": aggregate.timestamp_update_validation_status,
+        }
         if self.table_config.timestamp_update_validation:
-            chunks_validated = statistics.timestamp_chunks_validated
-            mismatch_count = statistics.timestamp_mismatch_count
+            timestamp_validation.update(
+                {
+                    "chunks_validated": statistics.timestamp_chunks_validated,
+                    "rows_validated": statistics.timestamp_rows_validated,
+                    "mismatch_count": statistics.timestamp_mismatch_count,
+                    "columns_validated": statistics.timestamp_columns_validated,
+                    "duration_seconds": (
+                        statistics.timestamp_validation_duration_seconds
+                    ),
+                }
+            )
 
-            if chunks_validated == 0:
-                timestamp_status = "NOT_RUN"
-            elif mismatch_count > 0:
-                timestamp_status = "FAILED"
-            else:
-                timestamp_status = "PASSED"
-
-            timestamp_validation = {
-                "enabled": True,
-                "chunks_validated": chunks_validated,
-                "rows_validated": statistics.timestamp_rows_validated,
-                "mismatch_count": mismatch_count,
-                "columns_validated": statistics.timestamp_columns_validated,
-                "duration_seconds": (
-                    statistics.timestamp_validation_duration_seconds
-                ),
-                "status": timestamp_status,
-            }
-        else:
-            timestamp_validation = {
-                "enabled": False,
-                "status": "DISABLED",
-            }
-
+        rowcount_lob_validation = {
+            "enabled": self.table_config.rowcount_lob_validation,
+            "status": aggregate.rowcount_lob_validation_status,
+        }
         if self.table_config.rowcount_lob_validation:
-            chunks_validated = statistics.rowcount_lob_chunks_validated
-            mismatch_count = statistics.rowcount_lob_mismatch_count
-
-            if chunks_validated == 0:
-                rowcount_lob_status = "NOT_RUN"
-            elif mismatch_count > 0:
-                rowcount_lob_status = "FAILED"
-            else:
-                rowcount_lob_status = "PASSED"
-
-            rowcount_lob_validation = {
-                "enabled": True,
-                "chunks_validated": chunks_validated,
-                "rows_validated": statistics.rowcount_lob_rows_validated,
-                "mismatch_count": mismatch_count,
-                "lob_columns_validated": statistics.lob_columns_validated,
-                "duration_seconds": (
-                    statistics.rowcount_lob_validation_duration_seconds
-                ),
-                "status": rowcount_lob_status,
-            }
-        else:
-            rowcount_lob_validation = {
-                "enabled": False,
-                "status": "DISABLED",
-            }
+            rowcount_lob_validation.update(
+                {
+                    "chunks_validated": statistics.rowcount_lob_chunks_validated,
+                    "rows_validated": statistics.rowcount_lob_rows_validated,
+                    "mismatch_count": statistics.rowcount_lob_mismatch_count,
+                    "lob_columns_validated": statistics.lob_columns_validated,
+                    "duration_seconds": (
+                        statistics.rowcount_lob_validation_duration_seconds
+                    ),
+                }
+            )
 
         return ValidationInfo(
+            overall_status=aggregate.overall_status,
+            rows_validated=aggregate.rows_validated,
+            mismatch_count=aggregate.mismatch_count,
+            columns_validated=(
+                aggregate.timestamp_columns_validated
+                + aggregate.lob_columns_validated
+            ),
+            duration_seconds=aggregate.duration_seconds,
             timestamp_update_validation=timestamp_validation,
             rowcount_lob_validation=rowcount_lob_validation,
         )
@@ -169,8 +165,7 @@ class SummaryManager:
     ):
         duration_seconds = int((end_time - start_time).total_seconds())
         target_table = (
-            self.table_config.table_name
-            + self.operation_config.target_table_suffix
+            self.table_config.table_name + self.operation_config.target_table_suffix
         )
         operation = OperationInfo(
             type=self.operation_config.type,
@@ -221,6 +216,11 @@ class SummaryManager:
         if validation is None:
             return None
         return {
+            "overall_status": validation.overall_status,
+            "rows_validated": validation.rows_validated,
+            "mismatch_count": validation.mismatch_count,
+            "columns_validated": validation.columns_validated,
+            "duration_seconds": validation.duration_seconds,
             "timestamp_update_validation": (
                 validation.timestamp_update_validation
             ),
