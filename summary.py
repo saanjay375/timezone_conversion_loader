@@ -37,6 +37,8 @@ class OperationInfo:
 
 @dataclass
 class ValidationInfo:
+    validation_fail_on_error: bool = False
+    validation_log_details: bool = True
     overall_status: str = "DISABLED"
     rows_validated: int = 0
     mismatch_count: int = 0
@@ -149,8 +151,12 @@ class SummaryManager:
                     ),
                 }
             )
+        validation_fail_on_error = self.table_config.validation_fail_on_error
 
+        validation_log_details = self.table_config.validation_log_details
         return ValidationInfo(
+            validation_fail_on_error=validation_fail_on_error,
+            validation_log_details=validation_log_details,
             overall_status=aggregate.overall_status,
             rows_validated=aggregate.rows_validated,
             mismatch_count=aggregate.mismatch_count,
@@ -243,6 +249,8 @@ class SummaryManager:
         if validation is None:
             return None
         return {
+            "validation_fail_on_error": validation.validation_fail_on_error,
+            "validation_log_details": validation.validation_log_details,
             "overall_status": validation.overall_status,
             "rows_validated": validation.rows_validated,
             "mismatch_count": validation.mismatch_count,

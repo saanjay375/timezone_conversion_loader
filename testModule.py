@@ -820,3 +820,42 @@ assert strict_manager.determine_status(clean_stats).value == "COMPLETED"
 print("CHANGE-6E-C-4 CLEAN EXECUTION TEST PASSED")
 
 print("ALL CHANGE-6E-C-4 TESTS PASSED")
+
+# ------------------------------------------------------------------
+# CHANGE-6E-D-1: VALIDATION CONFIGURATION REPORTING
+# ------------------------------------------------------------------
+
+config_reporting_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    validation_fail_on_error=True,
+    validation_log_details=False,
+)
+
+config_reporting_manager = SummaryManager(
+    global_config,
+    operation,
+    config_reporting_table,
+    Logger(),
+    [],
+)
+
+config_reporting_summary = config_reporting_manager.build_summary(
+    StatisticsCollector(),
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+payload = config_reporting_manager.to_dict(config_reporting_summary)
+
+validation = payload["validation"]
+
+assert validation["validation_fail_on_error"] is True
+assert validation["validation_log_details"] is False
+
+print("CHANGE-6E-D-1 VALIDATION CONFIGURATION REPORTING TEST PASSED")
+
+print("ALL CHANGE-6E-D-1 TESTS PASSED")
