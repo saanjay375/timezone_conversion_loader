@@ -101,6 +101,20 @@ class SQL:
         return "VALIDATE NULL ROWCOUNT LOB"
 
 
+class CaptureLogger:
+
+    def __init__(self):
+        self.messages = []
+
+    def info(self, message, *args):
+        if args:
+            message = message % args
+        self.messages.append(message)
+
+    def error(self, message, *args):
+        pass
+
+
 db = DatabaseConfig("localhost", 5432, "test", "test", "test")
 global_config = GlobalConfig(database=db)
 operation = OperationConfig(
@@ -420,6 +434,159 @@ aggregation_stats.rowcount_lob_rows_validated = 100
 aggregation_stats.lob_columns_validated = 2
 aggregation_stats.rowcount_lob_validation_duration_seconds = 3
 
+# ------------------------------------------------------------------
+# CHANGE-6E-C-1: VALIDATION REPORTING METRICS
+# ------------------------------------------------------------------
+
+aggregation_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    timestamp_update_validation=True,
+    rowcount_lob_validation=True,
+)
+
+# ----------------------------------------------------------
+# TEST 1
+# Both validations PASSED
+# ----------------------------------------------------------
+
+stats = StatisticsCollector()
+
+stats.timestamp_chunks_validated = 1
+stats.timestamp_rows_validated = 100
+stats.timestamp_columns_validated = 1
+
+stats.rowcount_lob_chunks_validated = 1
+stats.rowcount_lob_rows_validated = 100
+stats.lob_columns_validated = 2
+
+manager = SummaryManager(
+    global_config,
+    operation,
+    aggregation_table,
+    Logger(),
+    ["pxcommitdatetime"],
+)
+
+summary = manager.build_summary(
+    stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+payload = manager.to_dict(summary)
+validation = payload["validation"]
+
+assert validation["validation_count"] == 2
+assert validation["passed_validation_count"] == 2
+assert validation["failed_validation_count"] == 0
+assert validation["disabled_validation_count"] == 0
+assert validation["not_run_validation_count"] == 0
+
+print("CHANGE-6E-C-1 PASSED METRICS TEST PASSED")
+
+# ----------------------------------------------------------
+# TEST 2
+# One validation FAILED
+# ----------------------------------------------------------
+
+stats = StatisticsCollector()
+
+stats.timestamp_chunks_validated = 1
+stats.timestamp_mismatch_count = 5
+
+stats.rowcount_lob_chunks_validated = 1
+
+summary = manager.build_summary(
+    stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+payload = manager.to_dict(summary)
+validation = payload["validation"]
+
+assert validation["validation_count"] == 2
+assert validation["passed_validation_count"] == 1
+assert validation["failed_validation_count"] == 1
+assert validation["disabled_validation_count"] == 0
+assert validation["not_run_validation_count"] == 0
+
+print("CHANGE-6E-C-1 FAILED METRICS TEST PASSED")
+
+# ----------------------------------------------------------
+# TEST 3
+# Both validations DISABLED
+# ----------------------------------------------------------
+
+disabled_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    timestamp_update_validation=False,
+    rowcount_lob_validation=False,
+)
+
+disabled_manager = SummaryManager(
+    global_config,
+    operation,
+    disabled_table,
+    Logger(),
+    [],
+)
+
+stats = StatisticsCollector()
+
+summary = disabled_manager.build_summary(
+    stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+payload = disabled_manager.to_dict(summary)
+validation = payload["validation"]
+
+assert validation["validation_count"] == 0
+assert validation["passed_validation_count"] == 0
+assert validation["failed_validation_count"] == 0
+assert validation["disabled_validation_count"] == 2
+assert validation["not_run_validation_count"] == 0
+
+print("CHANGE-6E-C-1 DISABLED METRICS TEST PASSED")
+
+# ----------------------------------------------------------
+# TEST 4
+# Both validations enabled but NOT_RUN
+# ----------------------------------------------------------
+
+stats = StatisticsCollector()
+
+summary = manager.build_summary(
+    stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+payload = manager.to_dict(summary)
+validation = payload["validation"]
+
+assert validation["validation_count"] == 2
+assert validation["passed_validation_count"] == 0
+assert validation["failed_validation_count"] == 0
+assert validation["disabled_validation_count"] == 0
+assert validation["not_run_validation_count"] == 2
+
+print("CHANGE-6E-C-1 NOT-RUN METRICS TEST PASSED")
+
+print("ALL CHANGE-6E-C-1 TESTS PASSED")
+
 aggregation_manager = SummaryManager(
     global_config,
     operation,
@@ -452,3 +619,132 @@ assert validation_payload["rowcount_lob_validation"]["lob_columns_validated"] ==
 print("CHANGE-6E-B SUMMARY SERIALIZATION TEST PASSED")
 
 print("ALL CHANGE-6D, CHANGE-6E-A AND CHANGE-6E-B TESTS PASSED")
+
+logger = CaptureLogger()
+
+manager = SummaryManager(
+    global_config,
+    operation,
+    aggregation_table,
+    logger,
+    ["pxcommitdatetime"],
+)
+
+manager.write_summary(summary)
+
+assert any("ValidationSummary" in msg for msg in logger.messages)
+
+print("CHANGE-6E-C-2 VALIDATION LOGGING TEST PASSED")
+
+# ------------------------------------------------------------------
+# CHANGE-6E-C-3: validation_log_details
+# ------------------------------------------------------------------
+
+# TEST 1
+# validation_log_details = True
+# Detailed validation logging expected
+
+detail_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    timestamp_update_validation=True,
+    rowcount_lob_validation=True,
+    validation_log_details=True,
+)
+
+detail_stats = StatisticsCollector()
+
+detail_stats.timestamp_chunks_validated = 1
+detail_stats.timestamp_rows_validated = 100
+detail_stats.timestamp_columns_validated = 1
+detail_stats.timestamp_validation_duration_seconds = 2
+
+detail_stats.rowcount_lob_chunks_validated = 1
+detail_stats.rowcount_lob_rows_validated = 100
+detail_stats.lob_columns_validated = 2
+detail_stats.rowcount_lob_validation_duration_seconds = 3
+
+detail_logger = CaptureLogger()
+
+detail_manager = SummaryManager(
+    global_config,
+    operation,
+    detail_table,
+    detail_logger,
+    ["pxcommitdatetime"],
+)
+
+detail_summary = detail_manager.build_summary(
+    detail_stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+detail_manager.write_summary(detail_summary)
+
+assert any("ValidationSummary" in msg for msg in detail_logger.messages)
+
+assert any("TimestampValidationSummary" in msg for msg in detail_logger.messages)
+
+assert any("RowcountLobValidationSummary" in msg for msg in detail_logger.messages)
+
+print("CHANGE-6E-C-3 DETAIL LOGGING TEST PASSED")
+
+
+# TEST 2
+# validation_log_details = False
+# Summary-only logging expected
+
+summary_only_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    timestamp_update_validation=True,
+    rowcount_lob_validation=True,
+    validation_log_details=False,
+)
+
+summary_only_stats = StatisticsCollector()
+
+summary_only_stats.timestamp_chunks_validated = 1
+summary_only_stats.timestamp_rows_validated = 100
+
+summary_only_stats.rowcount_lob_chunks_validated = 1
+summary_only_stats.rowcount_lob_rows_validated = 100
+
+summary_only_logger = CaptureLogger()
+
+summary_only_manager = SummaryManager(
+    global_config,
+    operation,
+    summary_only_table,
+    summary_only_logger,
+    ["pxcommitdatetime"],
+)
+
+summary_only_summary = summary_only_manager.build_summary(
+    summary_only_stats,
+    1,
+    datetime(2025, 1, 1),
+    datetime(2025, 1, 1, 0, 0, 5),
+)
+
+summary_only_manager.write_summary(summary_only_summary)
+
+assert any("ValidationSummary" in msg for msg in summary_only_logger.messages)
+
+assert not any(
+    "TimestampValidationSummary" in msg for msg in summary_only_logger.messages
+)
+
+assert not any(
+    "RowcountLobValidationSummary" in msg for msg in summary_only_logger.messages
+)
+
+print("CHANGE-6E-C-3 SUMMARY-ONLY LOGGING TEST PASSED")
+
+print("ALL CHANGE-6E-C-3 TESTS PASSED")

@@ -55,6 +55,15 @@ class ValidationSummary:
     timestamp_columns_validated: int = 0
     lob_columns_validated: int = 0
     duration_seconds: int = 0
+    validation_count: int = 0
+
+    passed_validation_count: int = 0
+
+    failed_validation_count: int = 0
+
+    disabled_validation_count: int = 0
+
+    not_run_validation_count: int = 0
 
 
 @dataclass
@@ -115,6 +124,16 @@ class StatisticsCollector:
             )
 
             statuses = [timestamp_status, rowcount_lob_status]
+            validation_count = sum(1 for status in statuses if status != "DISABLED")
+
+            passed_validation_count = statuses.count("PASSED")
+
+            failed_validation_count = statuses.count("FAILED")
+
+            disabled_validation_count = statuses.count("DISABLED")
+
+            not_run_validation_count = statuses.count("NOT_RUN")
+
             if "FAILED" in statuses:
                 overall_status = "FAILED"
             elif "PASSED" in statuses:
@@ -129,12 +148,10 @@ class StatisticsCollector:
                 timestamp_update_validation_status=timestamp_status,
                 rowcount_lob_validation_status=rowcount_lob_status,
                 rows_validated=(
-                    self.timestamp_rows_validated
-                    + self.rowcount_lob_rows_validated
+                    self.timestamp_rows_validated + self.rowcount_lob_rows_validated
                 ),
                 mismatch_count=(
-                    self.timestamp_mismatch_count
-                    + self.rowcount_lob_mismatch_count
+                    self.timestamp_mismatch_count + self.rowcount_lob_mismatch_count
                 ),
                 timestamp_columns_validated=self.timestamp_columns_validated,
                 lob_columns_validated=self.lob_columns_validated,
@@ -142,6 +159,11 @@ class StatisticsCollector:
                     self.timestamp_validation_duration_seconds
                     + self.rowcount_lob_validation_duration_seconds
                 ),
+                validation_count=validation_count,
+                passed_validation_count=passed_validation_count,
+                failed_validation_count=failed_validation_count,
+                disabled_validation_count=disabled_validation_count,
+                not_run_validation_count=not_run_validation_count,
             )
 
     def record_success(self, chunk, result: ChunkResult):
@@ -276,20 +298,15 @@ class CheckpointManager:
         with self._lock:
             payload = self._load_unlocked()
             validation_payload = self._validation_to_dict(timestamp_validation)
-            rowcount_lob_payload = self._validation_to_dict(
-                rowcount_lob_validation
-            )
+            rowcount_lob_payload = self._validation_to_dict(rowcount_lob_validation)
 
             if chunk.is_null_chunk:
                 payload["null_chunk_completed"] = True
-                payload["null_chunk_rows_inserted"] = (
-                    int(payload.get("null_chunk_rows_inserted", 0))
-                    + int(rows_inserted)
-                )
+                payload["null_chunk_rows_inserted"] = int(
+                    payload.get("null_chunk_rows_inserted", 0)
+                ) + int(rows_inserted)
                 payload["null_chunk_validation"] = validation_payload
-                payload["null_chunk_rowcount_lob_validation"] = (
-                    rowcount_lob_payload
-                )
+                payload["null_chunk_rowcount_lob_validation"] = rowcount_lob_payload
             else:
                 chunk_number = int(chunk.chunk_number)
                 completed_chunks = {
@@ -299,8 +316,8 @@ class CheckpointManager:
                 payload["completed_chunks"] = sorted(completed_chunks)
                 details = payload.setdefault("completed_chunk_details", {})
                 existing = details.get(str(chunk_number), {})
-                cumulative_rows = (
-                    int(existing.get("rows_inserted", 0)) + int(rows_inserted)
+                cumulative_rows = int(existing.get("rows_inserted", 0)) + int(
+                    rows_inserted
                 )
                 details[str(chunk_number)] = {
                     "start_value": self._format_datetime(chunk.start_value),
@@ -330,12 +347,10 @@ class CheckpointManager:
                 int(item.get("rows_inserted", 0))
                 for item in payload.get("completed_chunk_details", {}).values()
             )
-            payload["total_rows_inserted"] = (
-                range_rows + int(payload.get("null_chunk_rows_inserted", 0))
+            payload["total_rows_inserted"] = range_rows + int(
+                payload.get("null_chunk_rows_inserted", 0)
             )
-            payload["last_update_time"] = datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+            payload["last_update_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._write_unlocked(payload)
 
     def load(self):
@@ -425,14 +440,10 @@ class ChunkProcessor:
 
         with conn.cursor() as cur:
             if chunk.is_null_chunk:
-                sql_text = (
-                    self.sql_generator.build_null_rowcount_lob_validation_sql()
-                )
+                sql_text = self.sql_generator.build_null_rowcount_lob_validation_sql()
                 cur.execute(sql_text)
             else:
-                sql_text = (
-                    self.sql_generator.build_range_rowcount_lob_validation_sql()
-                )
+                sql_text = self.sql_generator.build_range_rowcount_lob_validation_sql()
                 cur.execute(sql_text, (chunk.start_value, chunk.end_value))
 
             row = cur.fetchone()
@@ -444,7 +455,7 @@ class ChunkProcessor:
         offset = 2
 
         for column in lob_columns:
-            source_max, source_sum, target_max, target_sum = row[offset:offset + 4]
+            source_max, source_sum, target_max, target_sum = row[offset : offset + 4]
             source_max = int(source_max or 0)
             source_sum = int(source_sum or 0)
             target_max = int(target_max or 0)

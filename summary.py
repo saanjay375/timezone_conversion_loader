@@ -44,6 +44,15 @@ class ValidationInfo:
     duration_seconds: int = 0
     timestamp_update_validation: dict | None = None
     rowcount_lob_validation: dict | None = None
+    validation_count: int = 0
+
+    passed_validation_count: int = 0
+
+    failed_validation_count: int = 0
+
+    disabled_validation_count: int = 0
+
+    not_run_validation_count: int = 0
 
 
 @dataclass
@@ -98,7 +107,15 @@ class SummaryManager:
             self.table_config.timestamp_update_validation,
             self.table_config.rowcount_lob_validation,
         )
+        validation_count = aggregate.validation_count
 
+        passed_validation_count = aggregate.passed_validation_count
+
+        failed_validation_count = aggregate.failed_validation_count
+
+        disabled_validation_count = aggregate.disabled_validation_count
+
+        not_run_validation_count = aggregate.not_run_validation_count
         timestamp_validation = {
             "enabled": self.table_config.timestamp_update_validation,
             "status": aggregate.timestamp_update_validation_status,
@@ -137,9 +154,13 @@ class SummaryManager:
             overall_status=aggregate.overall_status,
             rows_validated=aggregate.rows_validated,
             mismatch_count=aggregate.mismatch_count,
+            validation_count=validation_count,
+            passed_validation_count=passed_validation_count,
+            failed_validation_count=failed_validation_count,
+            disabled_validation_count=disabled_validation_count,
+            not_run_validation_count=not_run_validation_count,
             columns_validated=(
-                aggregate.timestamp_columns_validated
-                + aggregate.lob_columns_validated
+                aggregate.timestamp_columns_validated + aggregate.lob_columns_validated
             ),
             duration_seconds=aggregate.duration_seconds,
             timestamp_update_validation=timestamp_validation,
@@ -221,10 +242,13 @@ class SummaryManager:
             "mismatch_count": validation.mismatch_count,
             "columns_validated": validation.columns_validated,
             "duration_seconds": validation.duration_seconds,
-            "timestamp_update_validation": (
-                validation.timestamp_update_validation
-            ),
+            "timestamp_update_validation": (validation.timestamp_update_validation),
             "rowcount_lob_validation": validation.rowcount_lob_validation,
+            "validation_count": validation.validation_count,
+            "passed_validation_count": validation.passed_validation_count,
+            "failed_validation_count": validation.failed_validation_count,
+            "disabled_validation_count": validation.disabled_validation_count,
+            "not_run_validation_count": validation.not_run_validation_count,
         }
 
     def to_dict(self, summary: SummaryFile):
@@ -258,12 +282,68 @@ class SummaryManager:
 
     def write_summary(self, summary: SummaryFile):
         payload = self.to_dict(summary)
+        validation = summary.validation
+
+        if validation is not None:
+
+            # Always log the aggregate validation summary
+            self.logger.info(
+                "ValidationSummary "
+                f"OverallStatus={validation.overall_status} "
+                f"ValidationCount={validation.validation_count} "
+                f"PassedValidations={validation.passed_validation_count} "
+                f"FailedValidations={validation.failed_validation_count} "
+                f"DisabledValidations={validation.disabled_validation_count} "
+                f"NotRunValidations={validation.not_run_validation_count} "
+                f"RowsValidated={validation.rows_validated} "
+                f"MismatchCount={validation.mismatch_count} "
+                f"Duration={validation.duration_seconds}s"
+            )
+
+            # Detailed validation logging only when enabled
+            if self.table_config.validation_log_details:
+
+                timestamp_validation = validation.timestamp_update_validation
+
+                if timestamp_validation is not None:
+                    self.logger.info(
+                        "TimestampValidationSummary "
+                        f"Enabled={timestamp_validation.get('enabled')} "
+                        f"Status={timestamp_validation.get('status')} "
+                        f"ChunksValidated={timestamp_validation.get('chunks_validated', 0)} "
+                        f"RowsValidated={timestamp_validation.get('rows_validated', 0)} "
+                        f"ColumnsValidated={timestamp_validation.get('columns_validated', 0)} "
+                        f"MismatchCount={timestamp_validation.get('mismatch_count', 0)} "
+                        f"Duration={timestamp_validation.get('duration_seconds', 0)}s"
+                    )
+
+                rowcount_lob_validation = validation.rowcount_lob_validation
+
+                if rowcount_lob_validation is not None:
+                    self.logger.info(
+                        "RowcountLobValidationSummary "
+                        f"Enabled={rowcount_lob_validation.get('enabled')} "
+                        f"Status={rowcount_lob_validation.get('status')} "
+                        f"ChunksValidated={rowcount_lob_validation.get('chunks_validated', 0)} "
+                        f"RowsValidated={rowcount_lob_validation.get('rows_validated', 0)} "
+                        f"LobColumnsValidated={rowcount_lob_validation.get('lob_columns_validated', 0)} "
+                        f"MismatchCount={rowcount_lob_validation.get('mismatch_count', 0)} "
+                        f"Duration={rowcount_lob_validation.get('duration_seconds', 0)}s"
+                    )
+
         summary_file = self.get_summary_file_path()
         tmp_file = summary_file + ".tmp"
-        os.makedirs(os.path.dirname(summary_file), exist_ok=True)
+
+        summary_directory = os.path.dirname(summary_file)
+
+        if summary_directory:
+            os.makedirs(summary_directory, exist_ok=True)
+
         with open(tmp_file, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=4)
+
         os.replace(tmp_file, summary_file)
+
         self.logger.info(f"SummaryFileCreated={summary_file}")
 
     def create_summary(
