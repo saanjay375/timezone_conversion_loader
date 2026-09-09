@@ -748,3 +748,75 @@ assert not any(
 print("CHANGE-6E-C-3 SUMMARY-ONLY LOGGING TEST PASSED")
 
 print("ALL CHANGE-6E-C-3 TESTS PASSED")
+
+# ------------------------------------------------------------------
+# CHANGE-6E-C-4: validation_fail_on_error
+# ------------------------------------------------------------------
+
+# TEST 1
+# validation_fail_on_error=False
+# Validation failure should result in COMPLETED_WITH_ERRORS
+
+warning_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    validation_fail_on_error=False,
+)
+
+warning_stats = StatisticsCollector()
+warning_stats.failed_chunks = 1
+
+warning_manager = SummaryManager(
+    global_config,
+    operation,
+    warning_table,
+    Logger(),
+    [],
+)
+
+assert warning_manager.determine_status(warning_stats).value == "COMPLETED_WITH_ERRORS"
+
+print("CHANGE-6E-C-4 WARNING MODE TEST PASSED")
+
+
+# TEST 2
+# validation_fail_on_error=True
+# Validation failure should escalate to FAILED
+
+strict_table = TableConfig(
+    schema="repack",
+    table_name="pr_index_test",
+    driving_column="pxcommitdatetime",
+    chunk_size="1M",
+    validation_fail_on_error=True,
+)
+
+strict_stats = StatisticsCollector()
+strict_stats.failed_chunks = 1
+
+strict_manager = SummaryManager(
+    global_config,
+    operation,
+    strict_table,
+    Logger(),
+    [],
+)
+
+assert strict_manager.determine_status(strict_stats).value == "FAILED"
+
+print("CHANGE-6E-C-4 STRICT MODE TEST PASSED")
+
+
+# TEST 3
+# validation_fail_on_error=True
+# No failures should remain COMPLETED
+
+clean_stats = StatisticsCollector()
+
+assert strict_manager.determine_status(clean_stats).value == "COMPLETED"
+
+print("CHANGE-6E-C-4 CLEAN EXECUTION TEST PASSED")
+
+print("ALL CHANGE-6E-C-4 TESTS PASSED")

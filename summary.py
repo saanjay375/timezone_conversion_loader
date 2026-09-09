@@ -168,10 +168,16 @@ class SummaryManager:
         )
 
     def determine_status(self, statistics, execution_failed=False):
+
         if execution_failed:
             return SummaryStatus.FAILED
+
+        if self.table_config.validation_fail_on_error and statistics.failed_chunks > 0:
+            return SummaryStatus.FAILED
+
         if statistics.failed_chunks > 0:
             return SummaryStatus.COMPLETED_WITH_ERRORS
+
         return SummaryStatus.COMPLETED
 
     def build_summary(
