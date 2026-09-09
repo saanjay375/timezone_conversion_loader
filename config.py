@@ -90,7 +90,6 @@ class OperationConfig:
 
 
 @dataclass
-@dataclass
 class TableConfig:
 
     schema: str
@@ -112,6 +111,10 @@ class TableConfig:
     timestamp_update_validation: bool = False
 
     rowcount_lob_validation: bool = False
+
+    validation_fail_on_error: bool = False
+
+    validation_log_details: bool = True
 
 
 ###############################################################################
@@ -214,6 +217,7 @@ def validate_chunk_size(chunk_size):
 
 
 class DatabaseConfigValidator:
+
     @staticmethod
     def validate(db_cfg: DatabaseConfig):
 
@@ -236,6 +240,7 @@ class DatabaseConfigValidator:
 
 
 class TableConfigValidator:
+
     @staticmethod
     def validate(table_cfg: TableConfig):
 
@@ -258,6 +263,7 @@ class TableConfigValidator:
 
 
 class GlobalConfigValidator:
+
     @staticmethod
     def validate(cfg: GlobalConfig):
 
@@ -295,6 +301,7 @@ class GlobalConfigValidator:
 
 
 class ConfigLoader:
+
     @staticmethod
     def load(config_file: str) -> GlobalConfig:
 
@@ -358,6 +365,14 @@ class ConfigLoader:
                         rowcount_lob_validation=table.get(
                             "rowcount_lob_validation",
                             False,
+                        ),
+                        validation_fail_on_error=table.get(
+                            "validation_fail_on_error",
+                            False,
+                        ),
+                        validation_log_details=table.get(
+                            "validation_log_details",
+                            True,
                         ),
                     )
                 )
